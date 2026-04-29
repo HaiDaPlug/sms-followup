@@ -1,0 +1,31 @@
+   ▲ Next.js 15.5.15
+   - Local:        http://127.0.0.1:3000
+   - Network:      http://127.0.0.1:3000
+
+ ✓ Starting...
+ ✓ Ready in 2.7s
+ ○ Compiling /api/dashboard/stats ...
+ ✓ Compiled /api/dashboard/stats in 10.1s (623 modules)
+ GET /api/dashboard/stats 200 in 10668ms
+ GET /app/import 200 in 11947ms
+ GET /app/dashboard 200 in 12095ms
+ ✓ Compiled /api/import/bokadirekt in 451ms (630 modules)
+ POST /api/import/bokadirekt 200 in 593ms
+ GET /api/dashboard/stats 200 in 110ms
+ ○ Compiling /app/patients ...
+ ✓ Compiled /app/patients in 721ms (639 modules)
+ GET /app/patients 200 in 1410ms
+ ○ Compiling /api/reminders/send ...
+ ✓ Compiled /api/reminders/send in 622ms (643 modules)
+ POST /api/reminders/send 200 in 759ms
+ ✓ Compiled in 528ms (413 modules)
+ GET /api/dashboard/stats 200 in 215ms
+ GET /app/dashboard 200 in 180ms
+ ✓ Compiled in 56ms
+ ○ Compiling /_not-found ...
+ ✓ Compiled /_not-found in 831ms (541 modules)
+ GET /dashboard 404 in 1111ms
+ ✓ Compiled / in 246ms (553 modules)
+ GET / 307 in 681ms
+ ✓ Compiled /app/dashboard in 156ms (383 modules)
+ GET /app/dashboard 200 in 476ms
