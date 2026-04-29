@@ -29,21 +29,36 @@ export function ImportForm() {
     setError(null);
     setSummary(null);
 
-    const csvText = await file.text();
-    const response = await fetch("/api/import/bokadirekt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ csvText })
-    });
-    const payload = (await response.json()) as { summary?: ImportSummary; error?: string };
-    setBusy(false);
+    try {
+      const csvText = await file.text();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60_000);
 
-    if (!response.ok || !payload.summary) {
-      setError(payload.error ?? "Importen misslyckades");
-      return;
+      const response = await fetch("/api/import/bokadirekt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csvText }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      const payload = (await response.json()) as { summary?: ImportSummary; error?: string };
+
+      if (!response.ok || !payload.summary) {
+        setError(payload.error ?? `Server svarade med ${response.status}`);
+        return;
+      }
+
+      setSummary(payload.summary);
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        setError("Importen tog för lång tid (>60 s). Försök med en mindre fil.");
+      } else {
+        setError(err instanceof Error ? err.message : "Nätverksfel — kontrollera anslutningen.");
+      }
+    } finally {
+      setBusy(false);
     }
-
-    setSummary(payload.summary);
   }
 
   return (

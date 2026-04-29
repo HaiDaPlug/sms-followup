@@ -85,6 +85,9 @@ export default async function PatientsPage({
           <h2 className="page-title">Patienter</h2>
           <p className="page-subtitle">Kontakter, senaste bokning, SMS-status och manuella åtgärder.</p>
         </div>
+        <div style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 500 }}>
+          {patients.length} av {store.patients.length} patienter
+        </div>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>

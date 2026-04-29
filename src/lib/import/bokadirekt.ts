@@ -1,12 +1,11 @@
-import type { Booking, ImportSummary, NormalizedBookingRow, Patient } from "@/types/clinic";
+import type { Booking, ImportSummary, NormalizedBookingRow, Patient, ReviewItem } from "@/types/clinic";
 import {
-  addReviewItem,
+  bulkAddReviewItems,
+  bulkUpsertBookings,
+  bulkUpsertPatients,
   createId,
   nowIso,
-  readStore,
-  touchBooking,
-  upsertBooking,
-  upsertPatient
+  readStore
 } from "@/lib/data/repository";
 import { parseDelimited } from "./csv";
 import {
@@ -86,9 +85,12 @@ function makePatientFromBooking(row: NormalizedBookingRow): Patient {
 export async function importBokaDirektCsv(csvText: string): Promise<ImportSummary> {
   const rows = parseBokaDirektCsv(csvText);
 
-  // Load current patients once — used for matching throughout the import
+  // Load existing data once — all matching is done in memory
   const store = await readStore();
   const patients = store.patients;
+
+  // Index existing bookings by external_booking_id for O(1) lookup
+  const existingByExtId = new Map(store.bookings.map((b) => [b.external_booking_id, b]));
 
   const summary: ImportSummary = {
     totalRows: rows.length,
@@ -101,17 +103,27 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
     reviewItemsCreated: 0
   };
 
-  // Collect all upserted bookings so we can recalculate patients at the end
-  const processedPatientIds = new Set<string>();
+  // Collect review items to bulk-insert at the end
+  const reviewItems: Omit<ReviewItem, "id" | "created_at" | "updated_at">[] = [];
+
+  // Maps to collect patients and bookings to upsert
+  // Keyed by patient id to deduplicate rows for the same patient
+  const patientMap = new Map<string, Patient>();
+  // Keyed by booking id
+  const bookingMap = new Map<string, Booking>();
+  // Patient id → bookings list (all bookings in this import for recalculation)
+  const patientBookingRows = new Map<string, Booking[]>();
+
+  const now = nowIso();
 
   for (const row of rows) {
     if (!row.normalized_phone) summary.missingPhoneCount += 1;
     if (isCancelledBooking(row.status)) summary.cancelledCount += 1;
     if (isFutureBooking(row.booking_at)) summary.futureBookingCount += 1;
 
-    // Review items for data quality issues
+    // Collect data quality review items
     for (const issue of row.issues) {
-      await addReviewItem({
+      reviewItems.push({
         type: issue.type,
         severity: issue.severity,
         title: issue.title,
@@ -120,7 +132,6 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
         status: "open",
         raw_data: row.raw_data
       });
-      summary.reviewItemsCreated += 1;
     }
 
     if (!row.booking_at) {
@@ -128,7 +139,7 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
       continue;
     }
 
-    // Patient upsert
+    // Patient matching (against DB patients + any new patients added this run)
     const match = matchBookingToPatient(row, patients);
     let patient: Patient | null = null;
     let uncertain = false;
@@ -136,7 +147,7 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
     if (match.confidence === "none" && !row.normalized_phone && !row.email) {
       uncertain = true;
     } else if (match.patient) {
-      const updated: Patient = {
+      patient = {
         ...match.patient,
         full_name: match.patient.full_name || row.patient_name || "Okand patient",
         first_name: match.patient.first_name ?? row.first_name,
@@ -144,21 +155,20 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
         phone: match.patient.phone ?? row.phone,
         normalized_phone: match.patient.normalized_phone ?? row.normalized_phone,
         email: match.patient.email ?? row.email,
-        updated_at: nowIso()
+        updated_at: now
       };
-      patient = await upsertPatient(updated);
-      // Keep local cache in sync for subsequent rows in this import
+      // Keep local cache in sync so subsequent rows match correctly
       const idx = patients.findIndex((p) => p.id === patient!.id);
       if (idx >= 0) patients[idx] = patient;
       uncertain = match.confidence !== "high";
     } else {
-      const newPatient = makePatientFromBooking(row);
-      patient = await upsertPatient(newPatient);
+      patient = makePatientFromBooking(row);
+      // Add to local cache immediately so later rows for the same person match
       patients.push(patient);
     }
 
     if (uncertain) {
-      await addReviewItem({
+      reviewItems.push({
         type: "uncertain_match",
         severity: "medium",
         title: "Uncertain patient match",
@@ -167,18 +177,14 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
         status: "open",
         raw_data: row.raw_data
       });
-      summary.reviewItemsCreated += 1;
     }
 
     if (patient) {
-      summary.importedOrUpdatedPatients += 1;
-      processedPatientIds.add(patient.id);
+      patientMap.set(patient.id, patient);
     }
 
-    // Booking upsert
-    const existingBooking = store.bookings.find(
-      (b) => b.external_booking_id === row.external_booking_id
-    );
+    // Build booking record
+    const existingBooking = existingByExtId.get(row.external_booking_id);
     const bookingRow: Booking = {
       id: existingBooking?.id ?? createId("booking"),
       external_booking_id: row.external_booking_id,
@@ -192,46 +198,52 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
       status: row.status,
       source: row.source,
       raw_data: row.raw_data,
-      created_at: existingBooking?.created_at ?? nowIso(),
-      updated_at: nowIso()
+      created_at: existingBooking?.created_at ?? now,
+      updated_at: now
     };
-    const saved = await upsertBooking(existingBooking ? touchBooking(bookingRow) : bookingRow);
-    if (!existingBooking) {
-      summary.importedBookings += 1;
-      store.bookings.push(saved);
-    } else {
-      const idx = store.bookings.findIndex((b) => b.id === saved.id);
-      if (idx >= 0) store.bookings[idx] = saved;
+
+    bookingMap.set(bookingRow.id, bookingRow);
+    if (!existingBooking) summary.importedBookings += 1;
+
+    if (patient?.id) {
+      const list = patientBookingRows.get(patient.id) ?? [];
+      list.push(bookingRow);
+      patientBookingRows.set(patient.id, list);
     }
   }
 
-  // Recalculate last_booking_at / has_future_booking for all touched patients
-  for (const patientId of processedPatientIds) {
-    const patientBookings = store.bookings.filter((b) => b.patient_id === patientId);
-    const futureBookings = patientBookings.filter((b) => isFutureBooking(b.booking_at));
-    const validPast = patientBookings
-      .filter(
-        (b) =>
-          b.booking_at &&
-          !isFutureBooking(b.booking_at) &&
-          !isCancelledBooking(b.status)
-      )
+  summary.importedOrUpdatedPatients = patientMap.size;
+  summary.reviewItemsCreated = reviewItems.length;
+
+  // Recalculate last_booking_at / latest_treatment / has_future_booking
+  // using all bookings for each patient (DB bookings + new ones from this import)
+  for (const [patientId, patient] of patientMap) {
+    // Combine existing DB bookings for this patient with new ones from this run
+    const dbBookings = store.bookings.filter((b) => b.patient_id === patientId);
+    const newBookings = patientBookingRows.get(patientId) ?? [];
+    // Merge, new bookings take precedence (same id = overwrite)
+    const newById = new Map(newBookings.map((b) => [b.id, b]));
+    const allBookings = [...dbBookings.map((b) => newById.get(b.id) ?? b), ...newBookings.filter((b) => !dbBookings.some((d) => d.id === b.id))];
+
+    const futureBookings = allBookings.filter((b) => isFutureBooking(b.booking_at));
+    const validPast = allBookings
+      .filter((b) => b.booking_at && !isFutureBooking(b.booking_at) && !isCancelledBooking(b.status))
       .sort((a, b) => new Date(b.booking_at!).getTime() - new Date(a.booking_at!).getTime());
 
     const latest = validPast[0];
-    const patientIdx = patients.findIndex((p) => p.id === patientId);
-    if (patientIdx >= 0) {
-      const updated: Patient = {
-        ...patients[patientIdx],
-        last_booking_at: latest?.booking_at ?? null,
-        latest_treatment: latest?.treatment ?? null,
-        has_future_booking: futureBookings.length > 0,
-        updated_at: nowIso()
-      };
-      await upsertPatient(updated);
-      patients[patientIdx] = updated;
-    }
+    patientMap.set(patientId, {
+      ...patient,
+      last_booking_at: latest?.booking_at ?? null,
+      latest_treatment: latest?.treatment ?? null,
+      has_future_booking: futureBookings.length > 0,
+      updated_at: now
+    });
   }
+
+  // Bulk write — 3 round-trips regardless of file size
+  await bulkUpsertPatients([...patientMap.values()]);
+  await bulkUpsertBookings([...bookingMap.values()]);
+  await bulkAddReviewItems(reviewItems);
 
   return summary;
 }

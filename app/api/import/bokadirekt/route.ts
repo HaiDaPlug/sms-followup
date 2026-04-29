@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { importBokaDirektCsv } from "@/lib/import/bokadirekt";
 
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     const contentType = request.headers.get("content-type") ?? "";

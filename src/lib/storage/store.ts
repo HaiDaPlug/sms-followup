@@ -228,6 +228,34 @@ export async function upsertBooking(booking: Booking): Promise<Booking> {
   return data as Booking;
 }
 
+export async function bulkUpsertPatients(patients: Patient[]): Promise<Patient[]> {
+  if (patients.length === 0) return [];
+  const { data, error } = await supabase
+    .from("patients")
+    .upsert(patients, { onConflict: "id" })
+    .select();
+  throwOnError(data, error, "patients bulk upsert");
+  return (data ?? []) as Patient[];
+}
+
+export async function bulkUpsertBookings(bookings: Booking[]): Promise<Booking[]> {
+  if (bookings.length === 0) return [];
+  const { data, error } = await supabase
+    .from("bookings")
+    .upsert(bookings, { onConflict: "id" })
+    .select();
+  throwOnError(data, error, "bookings bulk upsert");
+  return (data ?? []) as Booking[];
+}
+
+export async function bulkAddReviewItems(
+  items: Omit<ReviewItem, "id" | "created_at" | "updated_at">[]
+): Promise<void> {
+  if (items.length === 0) return;
+  const { error } = await supabase.from("review_items").insert(items);
+  if (error) throw new Error(`Supabase review_items bulk insert: ${error.message}`);
+}
+
 // ---------------------------------------------------------------------------
 // Touch helpers (kept for callers that use them)
 // ---------------------------------------------------------------------------

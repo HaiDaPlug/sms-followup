@@ -1,6 +1,9 @@
 export {
   addReminderLog,
   addReviewItem,
+  bulkAddReviewItems,
+  bulkUpsertBookings,
+  bulkUpsertPatients,
   createId,
   getSettings,
   nowIso,
