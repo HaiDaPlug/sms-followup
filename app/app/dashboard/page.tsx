@@ -1,5 +1,7 @@
 import { calculateDashboardStats } from "@/lib/reminders/eligibility";
 import { formatDate } from "@/lib/patients/status";
+import { KpiStrip } from "@/components/KpiStrip";
+import { ActivityPanel } from "@/components/ActivityPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -60,32 +62,12 @@ export default async function DashboardPage() {
       </div>
 
       {/* ── KPI strip — 4 numbers separated by hairlines ── */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(4, 1fr)",
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius)",
-        overflow: "hidden",
-        marginBottom: 20,
-      }}>
-        {[
-          { label: "Patienter totalt",     value: stats.totalPatients },
-          { label: "Redo för påminnelse",  value: stats.readyForReminder },
-          { label: "SMS denna månad",      value: stats.smsSentThisMonth },
-          { label: "Inväntar granskning",  value: stats.needsReviewCount },
-        ].map(({ label, value }, i) => (
-          <div key={label} style={{
-            padding: "22px 24px",
-            borderRight: i < 3 ? "1px solid var(--border)" : "none",
-          }}>
-            <p className="metric">{label}</p>
-            <p className="metric-value" style={{ color: value === 0 ? "var(--text-faint)" : "var(--text)" }}>
-              {value}
-            </p>
-          </div>
-        ))}
-      </div>
+      <KpiStrip items={[
+        { label: "Patienter totalt",    value: stats.totalPatients },
+        { label: "Redo för påminnelse", value: stats.readyForReminder, clickable: "ready" },
+        { label: "SMS denna månad",     value: stats.smsSentThisMonth, clickable: "sms" },
+        { label: "Inväntar granskning", value: stats.needsReviewCount, clickable: "review" },
+      ]} />
 
       {/* ── High-severity alerts ── */}
       {highNudges.length > 0 && (
@@ -196,45 +178,11 @@ export default async function DashboardPage() {
           </div>
 
           {/* Senaste aktivitet */}
-          <div style={S.panel}>
-            <div style={S.sectionHeader}>
-              <span style={S.sectionLabel}>Senaste aktivitet</span>
-            </div>
-            {stats.recentReminderActivity.length === 0 ? (
-              <p style={{ padding: "16px 20px", fontSize: 13, color: "var(--text-muted)" }}>
-                Inga påminnelser skickade ännu.
-              </p>
-            ) : (
-              stats.recentReminderActivity.map((log) => (
-                <div key={log.id} style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  padding: "10px 20px",
-                  borderBottom: "1px solid var(--border)",
-                }}>
-                  <div>
-                    <p style={{ fontWeight: 500, fontSize: 13.5 }}>{log.phone ?? "—"}</p>
-                    <p style={{ fontSize: 12, color: "var(--text-muted)" }}>{formatDate(log.created_at)}</p>
-                  </div>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    {log.sequence_number ? (
-                      <span style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        color: "var(--text-muted)",
-                        letterSpacing: "0.04em",
-                      }}>SMS {log.sequence_number}</span>
-                    ) : null}
-                    <span className={`badge ${log.status}`}>
-                      {statusSv[log.status] ?? log.status}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+          <ActivityPanel
+            preview={stats.recentReminderActivity}
+            sectionHeaderStyle={S.sectionHeader}
+            sectionLabelStyle={S.sectionLabel}
+          />
 
         </div>
       </div>

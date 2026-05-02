@@ -158,7 +158,7 @@ export type DashboardStats = {
     needs_review: number;
     estimated_sms_count: number;
   };
-  recentReminderActivity: ReminderLog[];
+  recentReminderActivity: (ReminderLog & { full_name: string | null })[];
   nudges: Array<{
     title: string;
     description: string;

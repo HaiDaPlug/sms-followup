@@ -204,9 +204,16 @@ export async function calculateDashboardStats(): Promise<DashboardStats> {
     ).length,
     needsReviewCount: store.review_items.filter((item) => item.status === "open").length,
     dryRun,
-    recentReminderActivity: store.reminder_logs
-      .filter((l) => !l.is_cycle_reset)
-      .slice(0, 8),
+    recentReminderActivity: (() => {
+      const patientMap = new Map(store.patients.map((p) => [p.id, p]));
+      return store.reminder_logs
+        .filter((l) => !l.is_cycle_reset)
+        .slice(0, 8)
+        .map((l) => ({
+          ...l,
+          full_name: l.patient_id ? (patientMap.get(l.patient_id)?.full_name ?? null) : null,
+        }));
+    })(),
     nudges: [
       missingPhone > 0
         ? {
