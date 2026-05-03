@@ -504,7 +504,7 @@ export default async function PatientsPage({
 
                   {/* Actions */}
                   <div className="pt-cell pt-actions-cell">
-                    <PatientActions patientId={patient.id} />
+                    <PatientActions patientId={patient.id} doNotContact={patient.do_not_contact} />
                   </div>
                 </div>
               </div>

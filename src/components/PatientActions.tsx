@@ -100,6 +100,78 @@ const styles = `
 .pa-dnc-btn.pa-busy { opacity: 0.5; cursor: wait; }
 .pa-dnc-btn.pa-busy::before { display: none; }
 
+.pa-reactivate-btn {
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+  color: #1a6b5a;
+  border: 1px solid #b0dbd5;
+  border-radius: 5px;
+  padding: 0 12px;
+  height: 32px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.22s ease, border-color 0.22s ease;
+}
+.pa-reactivate-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #1a6b5a;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 0;
+}
+.pa-reactivate-btn:not([disabled]):hover::before { transform: scaleX(1); }
+.pa-reactivate-btn:not([disabled]):hover { color: #fff; border-color: #1a6b5a; }
+.pa-reactivate-btn > span { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; }
+.pa-reactivate-btn.pa-busy { opacity: 0.5; cursor: wait; }
+.pa-reactivate-btn.pa-busy::before { display: none; }
+
+.pa-delete-btn {
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+  color: #888;
+  border: 1px solid #e0e0e0;
+  border-radius: 5px;
+  padding: 0 10px;
+  height: 32px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.22s ease, border-color 0.22s ease, color 0.22s ease;
+}
+.pa-delete-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #c0392b;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 0;
+}
+.pa-delete-btn:not([disabled]):hover::before { transform: scaleX(1); }
+.pa-delete-btn:not([disabled]):hover { color: #fff; border-color: #c0392b; }
+.pa-delete-btn > span { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; }
+.pa-delete-btn.pa-busy { opacity: 0.5; cursor: wait; }
+.pa-delete-btn.pa-busy::before { display: none; }
+
 .pa-spinner {
   animation: pa-spin 0.7s linear infinite;
   flex-shrink: 0;
@@ -115,9 +187,17 @@ function injectStyles() {
   document.head.appendChild(el);
 }
 
-export function PatientActions({ patientId }: { patientId: string }) {
+export function PatientActions({
+  patientId,
+  doNotContact = false,
+}: {
+  patientId: string;
+  doNotContact?: boolean;
+}) {
   const [sendState, setSendState] = useState<SendState>("idle");
   const [dncBusy, setDncBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [isDnc, setIsDnc] = useState(doNotContact);
 
   if (typeof document !== "undefined") injectStyles();
 
@@ -144,11 +224,23 @@ export function PatientActions({ patientId }: { patientId: string }) {
   async function handleDnc() {
     if (dncBusy) return;
     setDncBusy(true);
-    await fetch(`/api/patients/${patientId}/do-not-contact`, {
+    const endpoint = isDnc
+      ? `/api/patients/${patientId}/reactivate`
+      : `/api/patients/${patientId}/do-not-contact`;
+    await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ patientId }),
     });
+    setIsDnc(!isDnc);
+    setDncBusy(false);
+    window.location.reload();
+  }
+
+  async function handleDelete() {
+    if (deleteBusy) return;
+    if (!window.confirm("Ta bort patienten permanent? Detta kan inte ångras.")) return;
+    setDeleteBusy(true);
+    await fetch(`/api/patients/${patientId}`, { method: "DELETE" });
     window.location.reload();
   }
 
@@ -177,14 +269,30 @@ export function PatientActions({ patientId }: { patientId: string }) {
         </span>
       </button>
 
+      {isDnc ? (
+        <button
+          className={`pa-reactivate-btn${dncBusy ? " pa-busy" : ""}`}
+          disabled={dncBusy}
+          onClick={handleDnc}
+        >
+          <span>{dncBusy ? "Sparar…" : "Återaktivera"}</span>
+        </button>
+      ) : (
+        <button
+          className={`pa-dnc-btn${dncBusy ? " pa-busy" : ""}`}
+          disabled={dncBusy}
+          onClick={handleDnc}
+        >
+          <span>{dncBusy ? "Sparar…" : "Kontakta ej"}</span>
+        </button>
+      )}
+
       <button
-        className={`pa-dnc-btn${dncBusy ? " pa-busy" : ""}`}
-        disabled={dncBusy}
-        onClick={handleDnc}
+        className={`pa-delete-btn${deleteBusy ? " pa-busy" : ""}`}
+        disabled={deleteBusy}
+        onClick={handleDelete}
       >
-        <span>
-          {dncBusy ? "Sparar…" : "Kontakta ej"}
-        </span>
+        <span>{deleteBusy ? "…" : "Ta bort"}</span>
       </button>
     </div>
   );
