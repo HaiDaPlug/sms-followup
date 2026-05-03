@@ -1,7 +1,7 @@
 # Current State — Clinic Rebooking Reminder System
 
-**Last updated:** 2026-05-02
-**Phase:** Supabase live, branding applied, deployed to Vercel via GitHub. 46elks credentials added locally. Dashboard modals, SMS-historik page, and pagination complete.
+**Last updated:** 2026-05-03 (patients page redesign + UX polish)
+**Phase:** Supabase live, branding applied, deployed to Vercel via GitHub. 46elks credentials added locally. Dashboard modals, SMS-historik page, pagination, dynamic SMS steps, and failed SMS review loop complete.
 
 ---
 
@@ -16,6 +16,10 @@ A clinic rebooking engine built for Osteopaticentrum (Borås) that:
 6. Logs all activity and surfaces data quality issues for review
 
 One deployment per clinic. No multi-tenancy, no auth — intentional for V1.
+
+> **Future idea — white-label:** Upload a logo, the app extracts the brand colors and applies them automatically. Each clinic gets their own look without any manual theming. Potential path to selling this as a product rather than a bespoke deployment.
+
+> **Future idea — portal & isolated data:** Each clinic should eventually get their own login through a shared portal, with fully isolated data per tenant (own patients, bookings, settings, SMS logs). Right now everything lives in one shared Supabase project with no auth. Moving to per-user isolated data is the prerequisite for selling this to multiple clinics without manual re-deploys. See `docs/scalability.md` for the full breakdown.
 
 ---
 
@@ -53,7 +57,7 @@ One deployment per clinic. No multi-tenancy, no auth — intentional for V1.
 | Route | Status | Notes |
 |-------|--------|-------|
 | `/app/dashboard` | Working | KPI strip with clickable modals, daily prognos, alerts, varningar, senaste aktivitet |
-| `/app/patients` | Working | Full-width table, status + sort filters, send SMS + do-not-contact actions |
+| `/app/patients` | Working | Redesigned table with card-style rows, left-bar status accents, instant client-side search, sticky column header with inline pagination, fill-sweep SMS + DNC buttons, status dot indicators |
 | `/app/sms-history` | Working | All contacted patients, full SMS log per patient, send + remove/reactivate actions |
 | `/app/import` | Working | Upload BokaDirekt CSV, Swedish summary labels |
 | `/app/review` | Working | Review queue with resolve/ignore actions |
@@ -61,7 +65,7 @@ One deployment per clinic. No multi-tenancy, no auth — intentional for V1.
 
 ### Dashboard — interactive KPI modals
 All four KPI cards are clickable and open modals:
-- **Redo för påminnelse** — paginated list (50/page) with Äldst/Senast sort toggle and "Skicka SMS" per row with fill-sweep hover effect. Sends immediately, patient slides out, KPI counts update live.
+- **Redo för påminnelse** — paginated list (50/page) with Senast/Äldst sort toggle (Senast left, Äldst right) and "Skicka SMS" per row with fill-sweep hover effect. Sends immediately, patient slides out, KPI counts update live.
 - **SMS denna månad** — all sent logs this month with patient name, phone, sequence number, and date.
 - **Inväntar granskning** — open review items with title, description, and severity badge.
 - **Senaste aktivitet** — preview panel with "Visa alla ↗" button opening full activity history modal.
@@ -101,7 +105,9 @@ All modals share:
 | `GET /api/dashboard/review-items` | Working | Open review items |
 | `GET /api/dashboard/activity` | Working | Full activity log with patient names |
 | `POST /api/reminders/send` | Working | Manual send for a single patient |
+| `POST /api/reminders/send-message` | Working | Send a literal pre-rendered message, resolves review item on success |
 | `POST /api/reminders/test` | Working | Send a test SMS to a given phone number |
+| `POST /api/patients` | Working | Manually create a patient (name, phone, email) |
 | `GET/POST /api/settings` | Working | Read/update settings |
 | `POST /api/patients/[id]/do-not-contact` | Working | Blocks patient from future SMS |
 | `POST /api/patients/[id]/reactivate` | Working | Re-enables a blocked patient |
@@ -175,20 +181,73 @@ src/lib/reminders/process.ts
 
 ## What Still Needs to Be Done
 
-### Before sending real SMS in production
+## Current Priorities
+
+### 1. Prove the core SMS loop (next up)
 - [ ] Add `FORTYSIX_ELKS_USERNAME`, `FORTYSIX_ELKS_PASSWORD`, `FORTYSIX_ELKS_FROM` to Vercel env vars
 - [ ] Turn off dry-run mode in `/app/settings`
-- [ ] Send one test SMS via `/api/reminders/test` to confirm delivery
+- [ ] Add yourself as a patient via the new "+ Lägg till patient" button on `/app/patients`
+- [ ] Hit "Skicka SMS" on your own row — confirm delivery end-to-end
+- [ ] Send one test SMS via `/api/reminders/test` as a secondary check
+
+### 2. Wire in BokaDirekt webhooks (automatic booking updates)
+- [ ] Get a real webhook payload sample from BokaDirekt to confirm field names (`phone`/`Phone`/`mobilnummer` etc.)
+- [ ] Update `src/lib/webhooks/bokadirekt.ts` field mapping to match real payload
+- [ ] Set `BOKADIREKT_WEBHOOK_SECRET` in Vercel and verify signature check in `/api/webhooks/bokadirekt`
+- [ ] Register the webhook URL with BokaDirekt pointing to `https://<your-domain>/api/webhooks/bokadirekt`
+- [ ] Test: make a real booking and confirm patient `last_booking_at` updates and cycle resets automatically
 
 ### Before sharing the URL publicly
 - [ ] Set `CRON_SECRET` — without it anyone can trigger mass SMS sends
-- [ ] Set `BOKADIREKT_WEBHOOK_SECRET` — without it anyone can spoof webhook calls
+- [ ] Set `BOKADIREKT_WEBHOOK_SECRET` — see priority 2 above
 - [ ] Add auth to `/api/settings` and `/api/reminders/send`
 
+### Recently completed (2026-05-03 — session 2)
+
+#### Patients page redesign
+- Card-style rows with a 4px colored left-bar keyed to status (mint = ready/sent, blue = future, red = alert, amber = do-not-contact, grey = inactive)
+- Alternating row depth + mint hover tint
+- Sticky column header pulled outside scroll container — stays visible while scrolling 970 rows
+- Inline pagination (← 1/20 →) lives in the "Åtgärder" header cell — no scrolling to bottom to change pages
+- Instant client-side search via `PatientSearch` component — filters rows on every keystroke, updates count chip live, no network round-trip
+- Fill-sweep "Skicka SMS" button (dark green → mint sweep) and fill-sweep "Kontakta ej" (transparent → red sweep), consistent with dashboard modal buttons
+- Status badges redesigned: dot indicator + label in sentence case, no background fills. Ready = mint dot, Sent = darker mint, Future = steel blue, alert states = red, Waiting = warm grey, Do not contact = amber
+- Filter pills changed from full-pill to rounded rectangles (radius-sm), consistent with the rest of the UI
+- Control bar: title + count chip inline, segmented sort toggle, expanding search input
+- "Skicka SMS" fill-sweep also applied to KPI modal for consistency
+
+### Recently completed (2026-05-03 — session 1)
+
+#### Hardening
+- Review items are now idempotent on re-import — upsert on `content_hash`, no more duplicates
+- `do_not_contact` flag is never overwritten by import — blocked patients stay blocked
+- `has_future_booking` is now checked live against bookings at eligibility time, not from a stale stored flag
+- Patients can be added manually via UI (`+ Lägg till patient` on `/app/patients`)
+
+#### Dynamic SMS steps
+- "Dagar mellan steg" removed — each SMS step now has its own individually configurable day threshold
+- Steps editable inline: click the "dag 30" chip to type a new value, add/remove steps freely
+- `sms_steps` JSONB column drives eligibility; legacy 3-template columns kept in sync for backwards compat
+- `resolveSteps()` in `src/lib/reminders/steps.ts` is the single source of truth used by eligibility, process, and the form
+
+#### Failed SMS review loop
+- Failed or skipped sends (including unresolved `{{placeholders}}`) automatically create a `failed_sms` review item containing the fully rendered message
+- `/app/review` shows an inline editable textarea for `failed_sms` items — tweak the specific message and hit "Skicka nu" without touching the global template
+- `POST /api/reminders/send-message` sends a literal message string, bypasses template rendering, logs the result, and auto-resolves the review item on success
+- Template rendering validated before every send — any unresolved `{{token}}` blocks the send and surfaces in the review queue
+
+#### Pending migrations (run in Supabase SQL editor if not yet applied)
+```sql
+alter table review_items add column if not exists content_hash text;
+create unique index if not exists review_items_content_hash_idx
+  on review_items (content_hash) where content_hash is not null;
+
+alter table reminder_settings add column if not exists sms_steps jsonb;
+```
+
 ### Known limitations
-- `has_future_booking` only accurate at import time — does not update live
-- Medium-confidence patient matches imported optimistically, flagged in review queue
 - Webhook field names (`phone`, `Phone`, `mobilnummer`) are guesses until real BokaDirekt samples arrive
+- Medium-confidence patient matches imported optimistically, flagged in review queue
 
 ---
 

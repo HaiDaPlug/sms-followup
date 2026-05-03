@@ -1,4 +1,5 @@
 import { ReviewActions } from "@/components/ReviewActions";
+import { FailedSmsActions } from "@/components/FailedSmsActions";
 import { readStore } from "@/lib/data/repository";
 import { formatDate } from "@/lib/patients/status";
 
@@ -67,7 +68,19 @@ export default async function ReviewPage() {
                   </span>
                 </td>
                 <td className="muted">{formatDate(item.created_at)}</td>
-                <td>{item.status === "open" ? <ReviewActions reviewId={item.id} /> : null}</td>
+                <td>
+                  {item.status === "open" && item.type === "failed_sms" ? (
+                    <FailedSmsActions
+                      reviewId={item.id}
+                      patientId={String(item.raw_data.patient_id ?? "")}
+                      phone={String(item.raw_data.phone ?? "")}
+                      sequenceNumber={typeof item.raw_data.sequence_number === "number" ? item.raw_data.sequence_number : null}
+                      initialMessage={String(item.raw_data.rendered_message ?? "")}
+                    />
+                  ) : item.status === "open" ? (
+                    <ReviewActions reviewId={item.id} />
+                  ) : null}
+                </td>
               </tr>
             ))}
             {items.length === 0 ? (

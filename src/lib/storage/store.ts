@@ -33,6 +33,7 @@ function defaultSettings(): Omit<ReminderSettings, "id" | "created_at" | "update
     sms_template: defaultTemplate1,
     sms_template_2: defaultTemplate2,
     sms_template_3: defaultTemplate3,
+    sms_steps: null,
     booking_link: "",
     clinic_name: "Kliniken",
     is_active: true,
@@ -252,8 +253,20 @@ export async function bulkAddReviewItems(
   items: Omit<ReviewItem, "id" | "created_at" | "updated_at">[]
 ): Promise<void> {
   if (items.length === 0) return;
-  const { error } = await supabase.from("review_items").insert(items);
-  if (error) throw new Error(`Supabase review_items bulk insert: ${error.message}`);
+  // Upsert on content_hash so re-importing the same CSV never duplicates review items.
+  // Items without a hash (shouldn't happen) fall back to plain insert.
+  const withHash = items.filter((i) => i.content_hash);
+  const withoutHash = items.filter((i) => !i.content_hash);
+  if (withHash.length > 0) {
+    const { error } = await supabase
+      .from("review_items")
+      .upsert(withHash, { onConflict: "content_hash", ignoreDuplicates: true });
+    if (error) throw new Error(`Supabase review_items upsert: ${error.message}`);
+  }
+  if (withoutHash.length > 0) {
+    const { error } = await supabase.from("review_items").insert(withoutHash);
+    if (error) throw new Error(`Supabase review_items insert: ${error.message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

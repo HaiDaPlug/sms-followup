@@ -9,6 +9,9 @@ import type {
   ReviewItem
 } from "@/types/clinic";
 import { readStore } from "@/lib/data/repository";
+import { isFutureBooking } from "@/lib/import/normalizers";
+import { resolveSteps } from "./steps";
+export { resolveSteps } from "./steps";
 
 function daysBetween(date: string) {
   const diff = Date.now() - new Date(date).getTime();
@@ -38,11 +41,8 @@ function logsInCurrentCycle(patientId: string, logs: ReminderLog[]): ReminderLog
 }
 
 /**
- * How many successful SMS (sent or dry_run) have been sent in the current cycle,
- * and what sequence number should be sent next.
- *
- * Thresholds: SMS 1 → day 30, SMS 2 → day 60, SMS 3 → day 90
- * (each step is `days_after_booking` apart)
+ * Returns the next step that should be sent, or null if nothing is due yet / all sent.
+ * sequenceNumber is 1-based (1 = first step, 2 = second, etc.).
  */
 export function getNextSequence(
   patient: Patient,
@@ -52,28 +52,23 @@ export function getNextSequence(
   if (!patient.last_booking_at) return null;
 
   const days = daysBetween(patient.last_booking_at);
-  const step = settings.days_after_booking; // e.g. 30
+  const steps = resolveSteps(settings);
 
   const cycleLogs = logsInCurrentCycle(patient.id, logs);
   const sentInCycle = cycleLogs.filter(
     (l) => l.status === "sent" || l.status === "dry_run"
   );
-
-  // Highest sequence number already sent this cycle
   const maxSentSeq = sentInCycle.reduce(
     (max, l) => Math.max(max, l.sequence_number ?? 0),
     0
   );
 
-  // Work out which step we're in based on days elapsed
-  const currentStep = days >= step * 3 ? 3 : days >= step * 2 ? 2 : days >= step ? 1 : 0;
+  if (maxSentSeq >= steps.length) return null; // full sequence complete
 
-  if (currentStep === 0) return null; // not yet time for SMS 1
-  if (maxSentSeq >= currentStep) return null; // already sent for this step
-  if (maxSentSeq >= 3) return null; // full sequence complete
+  const nextStep = steps[maxSentSeq]; // 0-indexed: next to send
+  if (!nextStep || days < nextStep.day) return null; // not yet time
 
-  const next = (maxSentSeq + 1) as 1 | 2 | 3;
-  return { sequenceNumber: next, daysThreshold: step * next };
+  return { sequenceNumber: maxSentSeq + 1, daysThreshold: nextStep.day };
 }
 
 export function calculatePatientReminderStatus(
@@ -85,7 +80,11 @@ export function calculatePatientReminderStatus(
 ): PatientReminderStatus {
   if (patient.do_not_contact) return "Do not contact";
   if (!patient.normalized_phone) return "Missing phone";
-  if (patient.has_future_booking) return "Future booking";
+  // Check live rather than trusting the stored flag which goes stale between imports
+  const hasFutureBooking = bookings.some(
+    (b) => b.patient_id === patient.id && isFutureBooking(b.booking_at)
+  );
+  if (hasFutureBooking) return "Future booking";
   if (
     reviewItems.some(
       (item) =>
@@ -102,9 +101,10 @@ export function calculatePatientReminderStatus(
   const next = getNextSequence(patient, settings, logs);
 
   if (next === null) {
-    // Check whether it's "waiting" (not enough days) or "all sent"
+    // Check whether it's "waiting" (not yet reached first step) or "all sent"
     const days = daysBetween(patient.last_booking_at);
-    if (days < settings.days_after_booking) return "Waiting";
+    const firstStepDay = resolveSteps(settings)[0]?.day ?? settings.days_after_booking;
+    if (days < firstStepDay) return "Waiting";
     return "Sent"; // completed all applicable steps
   }
 
@@ -141,6 +141,11 @@ export function renderSmsTemplate(
     .replaceAll("{{lastBookingDate}}", lastBookingDate)
     .replaceAll("{{bookingLink}}", settings.booking_link)
     .replaceAll("{{clinicName}}", settings.clinic_name);
+}
+
+/** Returns any unresolved {{placeholder}} tokens left in the rendered message. */
+export function unresolvedPlaceholders(message: string): string[] {
+  return [...message.matchAll(/\{\{[^}]+\}\}/g)].map((m) => m[0]);
 }
 
 export function calculateDryRunSummary(

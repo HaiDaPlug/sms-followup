@@ -53,9 +53,9 @@ const globalStyles = `
 .send-btn {
   position: relative;
   overflow: hidden;
-  background: #fff;
-  color: #073B2C;
-  border: 1.5px solid #073B2C;
+  background: #073B2C;
+  color: #fff;
+  border: none;
   border-radius: 5px;
   padding: 6px 13px;
   font-size: 12px;
@@ -64,21 +64,23 @@ const globalStyles = `
   cursor: pointer;
   flex-shrink: 0;
   white-space: nowrap;
-  transition: color 0.28s ease;
+  transition: color 0.26s ease;
   isolation: isolate;
+  min-width: 100px;
+  text-align: center;
+  justify-content: center;
 }
 .send-btn::before {
   content: '';
   position: absolute;
   inset: 0;
-  background: #073B2C;
+  background: #5bbfb5;
   transform-origin: left center;
   transform: scaleX(0);
   transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   z-index: 0;
 }
-.send-btn:hover::before { transform: scaleX(1); }
-.send-btn:hover { color: #fff; }
+.send-btn:not([disabled]):hover::before { transform: scaleX(1); }
 .send-btn > * { position: relative; z-index: 1; }
 
 .send-btn.sent {
@@ -274,8 +276,9 @@ function Modal({ type, onClose, onSmsSent }: {
     : type === "sms" ? "SMS denna månad"
     : "Inväntar granskning";
 
+  const readyShown = Math.min(readyPage * 50, readyTotal);
   const footerText = loading ? null
-    : type === "ready" ? `Sida ${readyPage} av ${readyTotalPages} · ${readyTotal} patienter totalt`
+    : type === "ready" ? `${readyShown} av ${readyTotal} patienter`
     : type === "sms" ? `${smsLogs.length} SMS`
     : `${reviewItems.length} ärenden`;
 
@@ -460,7 +463,7 @@ function Modal({ type, onClose, onSmsSent }: {
                   padding: 2,
                   gap: 2,
                 }}>
-                  {(["oldest", "recent"] as SortOrder[]).map((opt) => (
+                  {(["recent", "oldest"] as SortOrder[]).map((opt) => (
                     <button
                       key={opt}
                       onClick={() => setSort(opt)}

@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import type { Booking, ImportSummary, NormalizedBookingRow, Patient, ReviewItem } from "@/types/clinic";
 import {
   bulkAddReviewItems,
@@ -15,6 +16,13 @@ import {
   normalizeName
 } from "./normalizers";
 import { suggestReviewActionWithAI } from "@/lib/review/ai";
+
+function reviewItemHash(item: Omit<ReviewItem, "id" | "created_at" | "updated_at" | "content_hash">) {
+  return createHash("sha256")
+    .update(`${item.type}|${item.title}|${JSON.stringify(item.raw_data)}`)
+    .digest("hex")
+    .slice(0, 32);
+}
 
 export function parseBokaDirektCsv(csvText: string) {
   return parseDelimited(csvText, ";").map(normalizeBokaDirektRow);
@@ -123,15 +131,16 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
 
     // Collect data quality review items
     for (const issue of row.issues) {
-      reviewItems.push({
+      const item = {
         type: issue.type,
         severity: issue.severity,
         title: issue.title,
         description: `${issue.description} Customer: ${row.patient_name ?? "unknown"}.`,
         suggested_action: suggestReviewActionWithAI(issue),
-        status: "open",
+        status: "open" as const,
         raw_data: row.raw_data
-      });
+      };
+      reviewItems.push({ ...item, content_hash: reviewItemHash(item) });
     }
 
     if (!row.booking_at) {
@@ -155,6 +164,8 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
         phone: match.patient.phone ?? row.phone,
         normalized_phone: match.patient.normalized_phone ?? row.normalized_phone,
         email: match.patient.email ?? row.email,
+        // Never overwrite do_not_contact — import must not silently re-enable a blocked patient
+        do_not_contact: match.patient.do_not_contact,
         updated_at: now
       };
       // Keep local cache in sync so subsequent rows match correctly
@@ -168,15 +179,16 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
     }
 
     if (uncertain) {
-      reviewItems.push({
+      const item = {
         type: "uncertain_match",
-        severity: "medium",
+        severity: "medium" as const,
         title: "Uncertain patient match",
         description: `Could not confidently match ${row.patient_name ?? "unknown customer"}.`,
         suggested_action: "Review the row before merging patient records.",
-        status: "open",
+        status: "open" as const,
         raw_data: row.raw_data
-      });
+      };
+      reviewItems.push({ ...item, content_hash: reviewItemHash(item) });
     }
 
     if (patient) {

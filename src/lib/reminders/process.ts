@@ -1,17 +1,18 @@
 import type { Patient, ReminderSettings } from "@/types/clinic";
-import { addReminderLog, getSettings, readStore } from "@/lib/data/repository";
+import { addReminderLog, addReviewItem, getSettings, readStore } from "@/lib/data/repository";
 import { sendSms } from "@/lib/sms/provider";
 import {
   calculatePatientReminderStatus,
   getNextSequence,
   latestValidBooking,
-  renderSmsTemplate
+  renderSmsTemplate,
+  resolveSteps,
+  unresolvedPlaceholders
 } from "./eligibility";
 
-function templateForSequence(settings: ReminderSettings, seq: 1 | 2 | 3): string {
-  if (seq === 2) return settings.sms_template_2;
-  if (seq === 3) return settings.sms_template_3;
-  return settings.sms_template;
+function templateForSequence(settings: ReminderSettings, seq: number): string {
+  const steps = resolveSteps(settings);
+  return steps[seq - 1]?.template ?? settings.sms_template;
 }
 
 export async function sendReminderToPatient(patient: Patient, forceDryRun = false) {
@@ -45,6 +46,36 @@ export async function sendReminderToPatient(patient: Patient, forceDryRun = fals
   const template = templateForSequence(settings, next.sequenceNumber);
   const message = renderSmsTemplate(template, patient, settings);
 
+  const unresolved = unresolvedPlaceholders(message);
+  if (unresolved.length > 0) {
+    await addReviewItem({
+      type: "failed_sms",
+      severity: "high",
+      title: `Ej lösta platshållare — ${patient.full_name}`,
+      description: `Mallen innehåller okända platshållare: ${unresolved.join(", ")}. Justera meddelandet och skicka igen.`,
+      suggested_action: "Redigera meddelandet nedan och skicka igen.",
+      status: "open",
+      raw_data: {
+        patient_id: patient.id,
+        phone: patient.normalized_phone,
+        sequence_number: next.sequenceNumber,
+        rendered_message: message,
+      },
+    });
+    return addReminderLog({
+      patient_id: patient.id,
+      booking_id: latest?.id ?? null,
+      phone: patient.normalized_phone,
+      message,
+      status: "skipped",
+      sequence_number: null,
+      is_cycle_reset: false,
+      provider_message_id: null,
+      error: `Mall innehåller ej lösta platshållare: ${unresolved.join(", ")}`,
+      sent_at: null
+    });
+  }
+
   if (settings.dry_run_mode || forceDryRun) {
     return addReminderLog({
       patient_id: patient.id,
@@ -61,7 +92,7 @@ export async function sendReminderToPatient(patient: Patient, forceDryRun = fals
   }
 
   const result = await sendSms({ to: patient.normalized_phone!, message });
-  return addReminderLog({
+  const log = await addReminderLog({
     patient_id: patient.id,
     booking_id: latest?.id ?? null,
     phone: patient.normalized_phone,
@@ -73,6 +104,25 @@ export async function sendReminderToPatient(patient: Patient, forceDryRun = fals
     error: result.error ?? null,
     sent_at: result.success ? new Date().toISOString() : null
   });
+
+  if (!result.success) {
+    await addReviewItem({
+      type: "failed_sms",
+      severity: "high",
+      title: `SMS misslyckades — ${patient.full_name}`,
+      description: result.error ?? "Okänt leverantörsfel.",
+      suggested_action: "Granska meddelandet nedan, justera vid behov och skicka igen.",
+      status: "open",
+      raw_data: {
+        patient_id: patient.id,
+        phone: patient.normalized_phone,
+        sequence_number: next.sequenceNumber,
+        rendered_message: message,
+      },
+    });
+  }
+
+  return log;
 }
 
 export async function processDailyReminders() {

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import type { ReminderSettings } from "@/types/clinic";
+import { useState, useRef } from "react";
+import type { ReminderSettings, SmsStep } from "@/types/clinic";
+import { resolveSteps } from "@/lib/reminders/steps";
 
 const VARIABLES_HINT = "{{firstName}}  {{fullName}}  {{lastBookingDate}}  {{bookingLink}}  {{clinicName}}";
 
@@ -16,35 +17,128 @@ function SectionHeader({ title, description }: { title: string; description: str
   );
 }
 
-function TemplateField({
-  id,
-  name,
-  label,
-  badge,
-  defaultValue,
+// ── Inline day editor chip ────────────────────────────────────────────────────
+
+function DayChip({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(value));
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function startEdit() {
+    setDraft(String(value));
+    setEditing(true);
+    setTimeout(() => { inputRef.current?.select(); }, 20);
+  }
+
+  function commit() {
+    const n = parseInt(draft, 10);
+    if (!Number.isNaN(n) && n > 0) onChange(n);
+    setEditing(false);
+  }
+
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === "Enter") { e.preventDefault(); commit(); }
+    if (e.key === "Escape") setEditing(false);
+  }
+
+  const chipStyle: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: "0.05em",
+    textTransform: "uppercase",
+    color: "var(--text-muted)",
+    background: "var(--surface-sub)",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    padding: "2px 8px",
+    cursor: "pointer",
+    userSelect: "none",
+    whiteSpace: "nowrap",
+  };
+
+  if (editing) {
+    return (
+      <span style={{ ...chipStyle, padding: "1px 6px", cursor: "text" }}>
+        dag{" "}
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={onKey}
+          type="number"
+          min={1}
+          style={{
+            width: 44,
+            border: "none",
+            background: "transparent",
+            font: "inherit",
+            fontSize: 11,
+            fontWeight: 700,
+            color: "var(--text)",
+            outline: "none",
+            padding: 0,
+            textAlign: "center",
+          }}
+        />
+      </span>
+    );
+  }
+
+  return (
+    <span style={chipStyle} onClick={startEdit} title="Klicka för att ändra dag">
+      dag {value} ✎
+    </span>
+  );
+}
+
+// ── Single SMS step card ──────────────────────────────────────────────────────
+
+function StepCard({
+  index,
+  step,
+  total,
+  onChange,
+  onRemove,
 }: {
-  id: string;
-  name: string;
-  label: string;
-  badge: string;
-  defaultValue: string;
+  index: number;
+  step: SmsStep;
+  total: number;
+  onChange: (s: SmsStep) => void;
+  onRemove: () => void;
 }) {
   return (
-    <div className="field" style={{ gap: 8 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <label htmlFor={id} style={{ margin: 0 }}>{label}</label>
-        <span style={{
-          fontSize: 10.5,
-          fontWeight: 700,
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          background: "var(--accent-bg)",
-          color: "var(--accent)",
-          borderRadius: 4,
-          padding: "2px 7px",
-        }}>{badge}</span>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-muted)" }}>
+          SMS {index + 1} —
+        </span>
+        <DayChip value={step.day} onChange={(day) => onChange({ ...step, day })} />
+        {total > 1 && (
+          <button
+            type="button"
+            className="secondary"
+            onClick={onRemove}
+            style={{
+              marginLeft: "auto",
+              fontSize: 11,
+              padding: "2px 9px",
+              minHeight: "unset",
+              color: "var(--text-muted)",
+            }}
+          >
+            Ta bort
+          </button>
+        )}
       </div>
-      <textarea defaultValue={defaultValue} id={id} name={name} style={{ minHeight: 100 }} />
+      <textarea
+        value={step.template}
+        onChange={(e) => onChange({ ...step, template: e.target.value })}
+        style={{ minHeight: 100 }}
+      />
       <div style={{
         background: "var(--surface-sub)",
         border: "1px solid var(--border)",
@@ -62,36 +156,59 @@ function TemplateField({
   );
 }
 
+// ── Main form ─────────────────────────────────────────────────────────────────
+
 export function SettingsForm({ settings }: { settings: ReminderSettings }) {
   const [message, setMessage] = useState<string | null>(null);
   const [messageType, setMessageType] = useState<"ok" | "error">("ok");
   const [busy, setBusy] = useState(false);
   const [dryRun, setDryRun] = useState(settings.dry_run_mode);
+  const [steps, setSteps] = useState<SmsStep[]>(() => resolveSteps(settings));
+
+  function updateStep(i: number, s: SmsStep) {
+    setSteps((prev) => prev.map((x, idx) => (idx === i ? s : x)));
+  }
+
+  function removeStep(i: number) {
+    setSteps((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  function addStep() {
+    const lastDay = steps[steps.length - 1]?.day ?? 0;
+    setSteps((prev) => [...prev, { day: lastDay + 30, template: "" }]);
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     setMessage(null);
     const data = new FormData(event.currentTarget);
+
+    // Sort steps by day before saving
+    const sortedSteps = [...steps].sort((a, b) => a.day - b.day);
+
     const response = await fetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        days_after_booking: Number(data.get("days_after_booking")),
         send_time: data.get("send_time"),
         max_per_day: Number(data.get("max_per_day")),
-        sms_template: data.get("sms_template"),
-        sms_template_2: data.get("sms_template_2"),
-        sms_template_3: data.get("sms_template_3"),
         booking_link: data.get("booking_link"),
         clinic_name: data.get("clinic_name"),
         is_active: data.get("is_active") === "on",
         dry_run_mode: data.get("dry_run_mode") === "on",
+        sms_steps: sortedSteps,
+        // Keep legacy fields in sync with step 1/2/3 for backwards compat
+        sms_template: sortedSteps[0]?.template ?? settings.sms_template,
+        sms_template_2: sortedSteps[1]?.template ?? settings.sms_template_2,
+        sms_template_3: sortedSteps[2]?.template ?? settings.sms_template_3,
+        days_after_booking: sortedSteps[0]?.day ?? settings.days_after_booking,
       }),
     });
     setBusy(false);
     setMessageType(response.ok ? "ok" : "error");
     setMessage(response.ok ? "Inställningar sparade." : "Kunde inte spara.");
+    if (response.ok) setSteps(sortedSteps);
   }
 
   async function testSms() {
@@ -103,8 +220,6 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
     setMessageType(response.ok ? "ok" : "error");
     setMessage(response.ok ? "Testmeddelande skickat." : payload.error ?? "Test misslyckades.");
   }
-
-  const step = settings.days_after_booking;
 
   return (
     <form onSubmit={submit} style={{ display: "grid", gap: 0, maxWidth: 760 }}>
@@ -129,27 +244,15 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
 
         <div className="grid cols-2">
           <div className="field">
-            <label htmlFor="days_after_booking">Dagar mellan steg</label>
-            <input
-              defaultValue={settings.days_after_booking}
-              id="days_after_booking"
-              min="1"
-              name="days_after_booking"
-              type="number"
-            />
-            <span className="field-hint">SMS 1 på dag {step}, SMS 2 på dag {step * 2}, SMS 3 på dag {step * 3}.</span>
-          </div>
-          <div className="field">
             <label htmlFor="send_time">Sändningstid</label>
             <input defaultValue={settings.send_time} id="send_time" name="send_time" type="time" />
             <span className="field-hint">Klockslag för det dagliga batch-körningen.</span>
           </div>
-        </div>
-
-        <div className="field" style={{ maxWidth: 220 }}>
-          <label htmlFor="max_per_day">Max SMS per dag</label>
-          <input defaultValue={settings.max_per_day} id="max_per_day" min="1" name="max_per_day" type="number" />
-          <span className="field-hint">Tak per körning — skyddar mot oavsiktliga mass-skick.</span>
+          <div className="field" style={{ maxWidth: 220 }}>
+            <label htmlFor="max_per_day">Max SMS per dag</label>
+            <input defaultValue={settings.max_per_day} id="max_per_day" min="1" name="max_per_day" type="number" />
+            <span className="field-hint">Tak per körning — skyddar mot oavsiktliga mass-skick.</span>
+          </div>
         </div>
       </div>
 
@@ -157,30 +260,28 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: "none", padding: "24px 28px", display: "grid", gap: 24 }}>
         <SectionHeader
           title="SMS-mallar"
-          description="Tre meddelanden — ett per steg. Varje mall skickas exakt en gång per cykel per patient."
+          description="Ett meddelande per steg. Klicka på dagen för att ändra när det skickas."
         />
 
-        <TemplateField
-          id="sms_template"
-          name="sms_template"
-          label={`SMS 1 — dag ${step}`}
-          badge="Steg 1"
-          defaultValue={settings.sms_template}
-        />
-        <TemplateField
-          id="sms_template_2"
-          name="sms_template_2"
-          label={`SMS 2 — dag ${step * 2}`}
-          badge="Steg 2"
-          defaultValue={settings.sms_template_2}
-        />
-        <TemplateField
-          id="sms_template_3"
-          name="sms_template_3"
-          label={`SMS 3 — dag ${step * 3}`}
-          badge="Steg 3"
-          defaultValue={settings.sms_template_3}
-        />
+        {steps.map((step, i) => (
+          <StepCard
+            key={i}
+            index={i}
+            step={step}
+            total={steps.length}
+            onChange={(s) => updateStep(i, s)}
+            onRemove={() => removeStep(i)}
+          />
+        ))}
+
+        <button
+          type="button"
+          className="secondary"
+          onClick={addStep}
+          style={{ alignSelf: "flex-start", fontSize: 12.5 }}
+        >
+          + Lägg till steg
+        </button>
       </div>
 
       {/* ── Körläge ── */}

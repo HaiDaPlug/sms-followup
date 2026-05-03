@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     .sort((a, b) => {
       const tA = a.last_booking_at ? new Date(a.last_booking_at).getTime() : 0;
       const tB = b.last_booking_at ? new Date(b.last_booking_at).getTime() : 0;
-      return sort === "recent" ? tA - tB : tB - tA;
+      return sort === "oldest" ? tA - tB : tB - tA;
     });
 
   const total = all.length;

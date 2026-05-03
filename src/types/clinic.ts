@@ -37,17 +37,22 @@ export type Booking = {
   updated_at: string;
 };
 
+export type SmsStep = {
+  day: number;
+  template: string;
+};
+
 export type ReminderSettings = {
   id: string;
   days_after_booking: number;
   send_time: string;
   max_per_day: number;
-  /** SMS sent at day 30 (sequence 1) */
+  /** Legacy fixed templates — superseded by sms_steps when present */
   sms_template: string;
-  /** SMS sent at day 60 (sequence 2) */
   sms_template_2: string;
-  /** SMS sent at day 90 (sequence 3) */
   sms_template_3: string;
+  /** Variable-length sequence: [{day, template}, ...] sorted by day ascending */
+  sms_steps: SmsStep[] | null;
   booking_link: string;
   clinic_name: string;
   is_active: boolean;
@@ -82,6 +87,7 @@ export type ReviewItem = {
   suggested_action: string | null;
   status: ReviewStatus;
   raw_data: Record<string, unknown>;
+  content_hash?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -140,7 +146,7 @@ export type PatientReminderStatus =
 
 /** Which SMS in the sequence should be sent next, or null if none due yet / all sent */
 export type NextSequenceInfo = {
-  sequenceNumber: 1 | 2 | 3;
+  sequenceNumber: number;
   daysThreshold: number;
 } | null;
 

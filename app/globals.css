@@ -257,6 +257,9 @@ th {
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 tr:last-child td { border-bottom: 0; }
@@ -266,21 +269,69 @@ tbody tr:hover { background: var(--surface-sub); }
 .muted { color: var(--text-muted); font-size: 13px; }
 
 /* ─── Badges ─────────────────────────────────────────────────────────────── */
-.badge {
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 2px 7px;
-  white-space: nowrap;
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.7); }
 }
 
-.badge.ready, .badge.sent     { background: var(--accent-bg); color: var(--accent); }
-.badge.future, .badge.dry-run { background: var(--blue-bg);   color: var(--blue); }
-.badge.review, .badge.missing, .badge.failed { background: var(--red-bg); color: var(--red); }
-.badge.waiting, .badge.ignored, .badge.resolved { background: var(--amber-bg); color: var(--amber); }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  padding: 0;
+  white-space: nowrap;
+  background: none;
+  border-radius: 0;
+}
+
+.badge::before {
+  content: '';
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Ready */
+.badge.ready { color: #1a6b5c; }
+.badge.ready::before { background: #5bbfb5; }
+
+/* Sent — solid mint, static */
+.badge.sent { color: #2a7a68; }
+.badge.sent::before { background: #3da89d; }
+
+/* Future booking — steel blue */
+.badge.future { color: #1a4f78; }
+.badge.future::before { background: #4a8ab5; }
+
+/* Dry run — muted blue */
+.badge.dry-run { color: #2a5a8a; }
+.badge.dry-run::before { background: #6a9bc5; }
+
+/* Review / Missing / Failed — red alert */
+.badge.review  { color: #8b2020; }
+.badge.missing { color: #8b2020; }
+.badge.failed  { color: #8b2020; }
+.badge.review::before,
+.badge.missing::before,
+.badge.failed::before  { background: #c94040; }
+
+/* Waiting — warm grey */
+.badge.waiting { color: #4a5a56; }
+.badge.waiting::before { background: #8fa8a0; }
+
+/* Ignored / Do not contact — amber */
+.badge.ignored { color: #6b4800; }
+.badge.ignored::before { background: #c08020; }
+
+/* Resolved */
+.badge.resolved { color: #4a5a56; }
+.badge.resolved::before { background: #8fa8a0; }
 
 /* ─── Actions ────────────────────────────────────────────────────────────── */
 .actions {
@@ -331,6 +382,41 @@ button:disabled {
   opacity: 0.45;
   pointer-events: none;
 }
+
+.pt-add-btn {
+  position: relative;
+  overflow: hidden;
+  background: #073B2C;
+  color: #fff !important;
+  border: none !important;
+  border-radius: var(--radius-sm);
+  padding: 0 16px !important;
+  height: 34px;
+  min-height: unset;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: none;
+  flex-shrink: 0;
+}
+.pt-add-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #5bbfb5;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 0;
+}
+.pt-add-btn:hover { background: #073B2C !important; }
+.pt-add-btn:hover::before { transform: scaleX(1); }
+.pt-add-btn > span { position: relative; z-index: 1; }
 
 /* ─── Filters ────────────────────────────────────────────────────────────── */
 .filters {
