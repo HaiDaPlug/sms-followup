@@ -71,20 +71,25 @@ async function sendWith46Elks({ to, message }: SendSmsInput): Promise<SendSmsRes
     };
   }
 
+  const deliveryUrl = process.env.NEXT_PUBLIC_APP_URL
+    ? `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/sms-delivery`
+    : undefined;
+
   const form = new URLSearchParams({
     to,
     message,
-    ...(from ? { from } : {})
+    ...(from ? { from } : {}),
+    ...(deliveryUrl ? { whendelivered: deliveryUrl } : {})
   });
 
   try {
     const response = await fetch("https://api.46elks.com/a1/SMS", {
       method: "POST",
       headers: {
-        Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
-        "Content-Type": "application/x-www-form-urlencoded"
+        Authorization: `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded; charset=utf-8"
       },
-      body: form
+      body: form.toString()
     });
     const rawText = await response.text();
     let payload: { id?: string; error?: string; message?: string } = {};
