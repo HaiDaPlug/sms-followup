@@ -2,6 +2,7 @@ import Link from "next/link";
 import { PatientActions } from "@/components/PatientActions";
 import { AddPatientButton } from "@/components/AddPatientButton";
 import { PatientSearch } from "@/components/PatientSearch";
+import { PatientSmsPopup } from "@/components/PatientSmsPopup";
 import { readStore } from "@/lib/data/repository";
 import { calculatePatientReminderStatus } from "@/lib/reminders/eligibility";
 import { daysSince, formatDate, patientDisplayName } from "@/lib/patients/status";
@@ -107,6 +108,14 @@ export default async function PatientsPage({
   const paginated = patients.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   const currentParams = { status: active, sort, q, page };
+
+  // Build per-patient log map for popup (exclude cycle_reset noise)
+  const logsByPatient = new Map<string, typeof store.reminder_logs>();
+  for (const log of store.reminder_logs) {
+    if (!log.patient_id || log.is_cycle_reset) continue;
+    if (!logsByPatient.has(log.patient_id)) logsByPatient.set(log.patient_id, []);
+    logsByPatient.get(log.patient_id)!.push(log);
+  }
 
   return (
     <>
@@ -376,11 +385,7 @@ export default async function PatientsPage({
 
         {/* Right: search + sort */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          <form method="get" action="/app/patients" style={{ display: "contents" }}>
-            {active !== "all" && <input type="hidden" name="status" value={active} />}
-            {sort !== "oldest" && <input type="hidden" name="sort" value={sort} />}
-            <PatientSearch defaultValue={q} />
-          </form>
+          <PatientSearch defaultValue={q} currentParams={{ status: active, sort }} />
 
           <div className="pt-sort-seg">
             <Link
@@ -442,13 +447,17 @@ export default async function PatientsPage({
               patient.phone ?? "",
               patient.email ?? "",
             ].join(" ").toLowerCase();
+            const patientLogs = logsByPatient.get(patient.id) ?? [];
             return (
               <div key={patient.id} className="pt-row" data-search={searchKey}>
                 <div style={{ background: accent, flexShrink: 0 }} />
                 <div className="pt-row-inner">
                   {/* Name + email stacked */}
                   <div className="pt-cell pt-cell-name">
-                    <div className="pt-name">{patientDisplayName(patient)}</div>
+                    <PatientSmsPopup
+                      patientName={patientDisplayName(patient)}
+                      logs={patientLogs}
+                    />
                     {patient.email && (
                       <div className="pt-email">{patient.email}</div>
                     )}

@@ -1,23 +1,34 @@
 "use client";
 
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useEffect } from "react";
+import { useRouter } from "next/navigation";
 
-export function PatientSearch({ defaultValue }: { defaultValue: string }) {
+export function PatientSearch({ defaultValue, currentParams }: {
+  defaultValue: string;
+  currentParams: { status?: string; sort?: string };
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const router = useRouter();
+
+  const submit = useCallback((value: string) => {
+    const params = new URLSearchParams();
+    if (currentParams.status && currentParams.status !== "all") params.set("status", currentParams.status);
+    if (currentParams.sort && currentParams.sort !== "oldest") params.set("sort", currentParams.sort);
+    if (value.trim()) params.set("q", value.trim());
+    // Reset to page 1 on new search
+    const qs = params.toString();
+    router.push(`/app/patients${qs ? `?${qs}` : ""}`);
+  }, [router, currentParams]);
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const q = e.target.value.trim().toLowerCase();
-    const rows = document.querySelectorAll<HTMLElement>("[data-search]");
-    let visible = 0;
-    rows.forEach((row) => {
-      const match = !q || row.dataset.search!.includes(q);
-      row.style.display = match ? "" : "none";
-      if (match) visible++;
-    });
-    const chip = document.getElementById("pt-count-chip");
-    if (chip) chip.textContent = `${visible} / ${rows.length}`;
-    const empty = document.getElementById("pt-empty");
-    if (empty) empty.style.display = visible === 0 ? "" : "none";
+    const value = e.target.value;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => submit(value), 350);
+  }, [submit]);
+
+  useEffect(() => {
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, []);
 
   return (

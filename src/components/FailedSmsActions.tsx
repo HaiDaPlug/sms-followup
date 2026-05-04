@@ -41,12 +41,24 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
 
   async function resolve(status: "resolved" | "ignored") {
     setBusy(status === "resolved" ? "resolve" : "ignore");
-    await fetch(`/api/review/${reviewId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
-    });
-    window.location.reload();
+    setResult(null);
+    try {
+      const res = await fetch(`/api/review/${reviewId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setResult({ ok: false, text: data.error ?? `Fel ${res.status}` });
+      } else {
+        window.location.reload();
+      }
+    } catch {
+      setResult({ ok: false, text: "Nätverksfel — kontrollera anslutningen" });
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (

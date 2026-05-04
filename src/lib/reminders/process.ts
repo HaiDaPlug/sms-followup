@@ -98,7 +98,7 @@ export async function sendReminderToPatient(patient: Patient, forceDryRun = fals
     phone: patient.normalized_phone,
     message,
     status: result.success ? "sent" : "failed",
-    sequence_number: result.success ? next.sequenceNumber : null,
+    sequence_number: next.sequenceNumber,
     is_cycle_reset: false,
     provider_message_id: result.providerMessageId ?? null,
     error: result.error ?? null,
@@ -146,10 +146,33 @@ export async function processDailyReminders() {
     )
     .slice(0, settings.max_per_day);
 
-  const logs = [];
+  const results: { patientId: string; name: string; status: string; error: string | null; sequenceNumber: number | null }[] = [];
+
   for (const patient of eligible) {
-    logs.push(await sendReminderToPatient(patient));
+    try {
+      const log = await sendReminderToPatient(patient);
+      results.push({
+        patientId: patient.id,
+        name: patient.full_name,
+        status: log.status,
+        error: log.error ?? null,
+        sequenceNumber: log.sequence_number ?? null,
+      });
+    } catch (err) {
+      results.push({
+        patientId: patient.id,
+        name: patient.full_name,
+        status: "failed",
+        error: err instanceof Error ? err.message : "Oväntat fel",
+        sequenceNumber: null,
+      });
+    }
   }
 
-  return { processed: logs.length, logs };
+  const sent    = results.filter((r) => r.status === "sent").length;
+  const dryRun  = results.filter((r) => r.status === "dry_run").length;
+  const failed  = results.filter((r) => r.status === "failed").length;
+  const skipped = results.filter((r) => r.status === "skipped").length;
+
+  return { processed: results.length, sent, dry_run: dryRun, failed, skipped, results };
 }

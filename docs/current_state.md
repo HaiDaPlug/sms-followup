@@ -1,7 +1,7 @@
 # Current State — Clinic Rebooking Reminder System
 
-**Last updated:** 2026-05-04 (SMS fix, delivery receipts, booking date on add patient)
-**Phase:** SMS end-to-end confirmed working. Auth live. Delivery receipts via 46elks webhook. Manually added patients can now have a booking date set.
+**Last updated:** 2026-05-04 (session 5 — hardening, SMS history redesign, patient search fix)
+**Phase:** SMS loop production-hardened. DB constraints applied. Per-patient SMS popup. History page redesigned with card layout + real-time filtering.
 
 ---
 
@@ -117,6 +117,8 @@ All modals share:
 | `POST /api/review/[id]` | Working | Resolve/ignore review items |
 | `GET /api/cron/daily-reminders` | Working | Daily batch runner |
 | `POST /api/webhooks/bokadirekt` | Working | Import + cycle reset |
+| `DELETE /api/logs/:id` | Working | Delete single log entry |
+| `DELETE /api/logs` | Working | Clear logs by patientId or all (confirm:true) |
 
 ### Core Logic
 | Module | Status | Notes |
@@ -217,6 +219,45 @@ src/lib/reminders/process.ts
 - [ ] Set `BOKADIREKT_WEBHOOK_SECRET` — see priority 2 above
 - [ ] Add auth to `/api/settings` and `/api/reminders/send`
 
+### Recently completed (2026-05-04 — session 5)
+
+#### Database hardening (`supabase/migrations/004_reminder_logs_hardening.sql`)
+- `CHECK` constraint on `reminder_logs.status` — DB rejects unknown values at write time
+- `UNIQUE` partial index on `provider_message_id` — webhook can never update two rows for the same message
+- `UNIQUE` partial index on `(patient_id, sequence_number)` for sent/dry_run/delivered — physically impossible to send the same sequence step twice (guards double cron fires)
+- Index on `(patient_id, created_at DESC)` — fast per-patient log queries as data grows
+- Failed sends now store `sequence_number` so you always know which step failed
+
+#### API hardening
+- `send-message/route.ts`: phone validated with regex before hitting provider; `sendSms()` wrapped in try/catch; failed sends always store sequence_number
+- `send/route.ts`: JSON parse guarded, full try/catch, response now includes `error` field on failures
+- `sms-delivery/route.ts` (webhook): handles both form-encoded and JSON payloads; unknown status values logged as warnings; verifies DB row was actually found after update
+- `processDailyReminders()` now returns per-patient breakdown: `{ name, status, error, sequenceNumber }` for every patient processed plus totals — each patient wrapped in try/catch so one crash can't abort the batch
+- `FailedSmsActions.tsx`: resolve/ignore now checks response and shows error inline instead of silently reloading
+- `SmsHistoryActions.tsx`: checks response before reloading, shows error inline on failure
+
+#### Patient search fix
+- `PatientSearch` previously did client-side DOM filtering — only searched the 50 patients on the current page
+- Now debounces 350ms then calls `router.push()` with `?q=` param, triggering full server-side search across all patients before pagination
+
+#### Per-patient SMS popup
+- Click any patient name in the patient list → modal showing all their SMS logs: sequence, status badge, message preview, timestamp, error if any
+- "N SMS skickade" counter shown under the name when they have sent logs
+- Each log entry has a × delete button
+
+#### SMS history page redesign
+- Flat table replaced with card layout — one card per patient, colored left-border accent (red = failed, mint = sent, orange = mixed)
+- Log entries shown as inline pill chips: colored dot + label + date + × delete — much cleaner than stacked badges
+- Three filter tabs (Alla / Misslyckade / Skickade) as a proper segmented control — counts update in real-time as logs are deleted
+- Per-patient "Rensa" ghost button with trash icon instead of full danger button
+- "Rensa all historik" outlined danger button with confirm dialog
+- `DELETE /api/logs/:id` — delete single log entry
+- `DELETE /api/logs?patientId=x` — clear all logs for one patient
+- `DELETE /api/logs` (body `{ confirm: true }`) — wipe all history
+
+#### Logo
+- Clicking the sidebar logo navigates to `/app/dashboard`
+
 ### Recently completed (2026-05-04 — session 4)
 
 #### SMS end-to-end fix
@@ -286,11 +327,16 @@ src/lib/reminders/process.ts
 
 #### Pending migrations (run in Supabase SQL editor if not yet applied)
 ```sql
+-- 002
 alter table review_items add column if not exists content_hash text;
 create unique index if not exists review_items_content_hash_idx
   on review_items (content_hash) where content_hash is not null;
 
+-- 003
 alter table reminder_settings add column if not exists sms_steps jsonb;
+
+-- 004 (session 5)
+-- Run supabase/migrations/004_reminder_logs_hardening.sql
 ```
 
 ### Known limitations

@@ -74,9 +74,9 @@ export function AppSidebar() {
 
   return (
     <aside className="sidebar">
-      <div className="brand">
+      <Link href="/app/dashboard" className="brand" style={{ display: "flex" }}>
         <Image src="/osteopaticentrum.svg" alt="Osteopaticentrum" width={160} height={40} style={{ width: "100%", height: "auto" }} priority />
-      </div>
+      </Link>
       <nav className="nav" aria-label="Huvudnavigation">
         {navItems.map((item) => (
           <Link
