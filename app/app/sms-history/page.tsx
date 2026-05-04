@@ -5,16 +5,18 @@ import { SmsHistoryActions } from "@/components/SmsHistoryActions";
 export const dynamic = "force-dynamic";
 
 const statusSv: Record<string, string> = {
-  sent:    "Skickat",
-  dry_run: "Testläge",
-  failed:  "Misslyckades",
-  skipped: "Hoppades över",
+  sent:      "Skickat",
+  delivered: "Levererat",
+  dry_run:   "Testläge",
+  failed:    "Misslyckades",
+  skipped:   "Hoppades över",
 };
 
 function badgeClass(status: string) {
-  if (status === "sent")    return "ready";
-  if (status === "dry_run") return "future";
-  if (status === "failed")  return "review";
+  if (status === "delivered") return "ready";
+  if (status === "sent")      return "future";
+  if (status === "dry_run")   return "future";
+  if (status === "failed")    return "review";
   return "waiting";
 }
 
@@ -80,8 +82,15 @@ export default async function SmsHistoryPage() {
                 <td>
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                     {logs.map((log) => (
-                      <span key={log.id} className={`badge ${badgeClass(log.status)}`} title={log.message}>
-                        {log.sequence_number ? `SMS ${log.sequence_number}` : statusSv[log.status] ?? log.status}
+                      <span
+                        key={log.id}
+                        className={`badge ${badgeClass(log.status)}`}
+                        title={log.status === "failed" ? (log.error ?? log.message) : log.message}
+                        style={{ cursor: log.status === "failed" ? "help" : undefined }}
+                      >
+                        {log.sequence_number
+                          ? `SMS ${log.sequence_number}${log.status === "delivered" ? " ✓" : log.status === "failed" ? " ✗" : ""}`
+                          : (statusSv[log.status] ?? log.status)}
                       </span>
                     ))}
                   </div>
