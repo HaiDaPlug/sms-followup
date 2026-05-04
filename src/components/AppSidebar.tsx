@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LogoutButton } from "@/components/LogoutButton";
 
 const navItems = [
   {
@@ -88,7 +89,10 @@ export function AppSidebar() {
           </Link>
         ))}
       </nav>
-      <div className="sidebar-footer">Osteopaticentrum · Borås</div>
+      <div className="sidebar-footer" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <LogoutButton />
+        <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.3)", paddingLeft: 10 }}>Osteopaticentrum · Borås</div>
+      </div>
     </aside>
   );
 }
