@@ -69,9 +69,9 @@ export default async function LoginPage({
           animation: fadeUp 0.7s cubic-bezier(0.22,1,0.36,1) 0.1s forwards;
         }
         .login-logo img {
-          height: 32px;
+          height: 48px;
           filter: brightness(0) invert(1);
-          opacity: 0.9;
+          opacity: 0.92;
         }
 
         .login-left-body {
@@ -88,26 +88,28 @@ export default async function LoginPage({
 
         .login-tagline {
           font-family: 'Cormorant Garamond', Georgia, serif;
-          font-size: 42px;
+          font-size: 56px;
           font-weight: 300;
           font-style: italic;
-          line-height: 1.25;
+          line-height: 1.15;
           color: #fff;
-          letter-spacing: -0.01em;
-          margin-bottom: 24px;
+          letter-spacing: -0.02em;
+          margin-bottom: 28px;
+          text-shadow: 0 2px 40px rgba(0,0,0,0.18);
         }
 
         .login-tagline em {
           font-style: normal;
           color: #5bbfb5;
+          text-shadow: 0 0 40px rgba(91,191,181,0.4);
         }
 
         .login-desc {
-          font-size: 13.5px;
+          font-size: 14.5px;
           font-weight: 300;
-          color: rgba(255,255,255,0.5);
-          line-height: 1.7;
-          max-width: 280px;
+          color: rgba(255,255,255,0.62);
+          line-height: 1.75;
+          max-width: 300px;
         }
 
         .login-left-footer {
@@ -127,7 +129,7 @@ export default async function LoginPage({
           display: flex;
           align-items: center;
           justify-content: center;
-          padding: 60px 48px;
+          padding: 60px 72px;
           position: relative;
         }
 
@@ -149,26 +151,26 @@ export default async function LoginPage({
         }
 
         .login-form-eyebrow {
-          font-size: 10.5px;
+          font-size: 11px;
           font-weight: 500;
-          letter-spacing: 0.14em;
+          letter-spacing: 0.16em;
           text-transform: uppercase;
           color: #5bbfb5;
-          margin-bottom: 12px;
+          margin-bottom: 14px;
         }
 
         .login-form-title {
           font-family: 'Cormorant Garamond', Georgia, serif;
-          font-size: 36px;
+          font-size: 48px;
           font-weight: 400;
           color: #073B2C;
-          margin-bottom: 6px;
-          line-height: 1.1;
+          margin-bottom: 8px;
+          line-height: 1.0;
           letter-spacing: -0.02em;
         }
 
         .login-form-sub {
-          font-size: 13px;
+          font-size: 14px;
           color: #8aaa9e;
           margin-bottom: 40px;
           font-weight: 300;
