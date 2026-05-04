@@ -81,10 +81,6 @@ export default async function LoginPage({
           animation: fadeUp 0.8s cubic-bezier(0.22,1,0.36,1) 0.25s forwards;
         }
 
-        .login-spine {
-          margin-bottom: 40px;
-          opacity: 0.22;
-        }
 
         .login-tagline {
           font-family: 'Cormorant Garamond', Georgia, serif;
@@ -211,20 +207,6 @@ export default async function LoginPage({
           </div>
 
           <div className="login-left-body">
-            {/* Stylised vertebrae motif */}
-            <div className="login-spine">
-              <svg width="48" height="120" viewBox="0 0 48 120" fill="none" xmlns="http://www.w3.org/2000/svg">
-                {[0,1,2,3,4].map((i) => (
-                  <g key={i} transform={`translate(0, ${i * 24})`}>
-                    <rect x="14" y="3" width="20" height="14" rx="3" fill="white" />
-                    <rect x="4" y="7" width="8" height="6" rx="2" fill="white" />
-                    <rect x="36" y="7" width="8" height="6" rx="2" fill="white" />
-                    <line x1="24" y1="17" x2="24" y2="27" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
-                  </g>
-                ))}
-              </svg>
-            </div>
-
             <p className="login-tagline">
               Rörelse är<br /><em>medicinens</em><br />ursprung.
             </p>

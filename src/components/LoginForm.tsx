@@ -67,6 +67,7 @@ const formStyles = `
     position: relative;
     overflow: hidden;
     transition: transform 120ms, box-shadow 200ms;
+    text-align: center;
   }
 
   .lf-submit::before {
