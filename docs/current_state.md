@@ -1,7 +1,7 @@
 # Current State — Clinic Rebooking Reminder System
 
-**Last updated:** 2026-05-04 (auth gate + login redesign + patient delete/reactivate)
-**Phase:** Supabase Auth live. Login page with particle field, route protection middleware, patient delete + DNC toggle, 46elks error detail surfaced in logs.
+**Last updated:** 2026-05-04 (SMS fix, delivery receipts, booking date on add patient)
+**Phase:** SMS end-to-end confirmed working. Auth live. Delivery receipts via 46elks webhook. Manually added patients can now have a booking date set.
 
 ---
 
@@ -186,12 +186,11 @@ src/lib/reminders/process.ts
 
 ## Current Priorities
 
-### 1. Prove the core SMS loop (next up)
-- [ ] Add `FORTYSIX_ELKS_USERNAME`, `FORTYSIX_ELKS_PASSWORD`, `FORTYSIX_ELKS_FROM` to Vercel env vars
-- [ ] Turn off dry-run mode in `/app/settings`
-- [ ] Add yourself as a patient via the new "+ Lägg till patient" button on `/app/patients`
-- [ ] Hit "Skicka SMS" on your own row — confirm delivery end-to-end
-- [ ] Send one test SMS via `/api/reminders/test` as a secondary check
+### 1. Prove the core SMS loop
+- [x] Add 46elks credentials to Vercel env vars
+- [x] Turn off dry-run mode
+- [x] Confirmed SMS delivery end-to-end with Swedish characters
+- [x] Delivery receipts via `whendelivered` callback
 
 ### 2. Multi-tenant portal with per-user isolated data (next priority after webhooks)
 - [x] Add auth (Supabase Auth) — login gate in place
@@ -217,6 +216,20 @@ src/lib/reminders/process.ts
 - [ ] Set `CRON_SECRET` — without it anyone can trigger mass SMS sends
 - [ ] Set `BOKADIREKT_WEBHOOK_SECRET` — see priority 2 above
 - [ ] Add auth to `/api/settings` and `/api/reminders/send`
+
+### Recently completed (2026-05-04 — session 4)
+
+#### SMS end-to-end fix
+- Root cause found: Swedish characters (å, ä, ö) in SMS templates were being rejected by 46elks due to missing `charset=utf-8` in the Content-Type header. Fixed in `src/lib/sms/provider.ts`.
+- Confirmed working — test SMS delivered successfully to +46700996838
+- 46elks `whendelivered` callback added — 46elks POSTs delivery status back to `/api/webhooks/sms-delivery`, which updates `reminder_logs` row to `delivered` or `failed` via `provider_message_id`
+- `"delivered"` added to `ReminderLogStatus` type and counted as sent in sequence eligibility logic (prevents re-sending already-delivered steps)
+- SMS-historik now shows `delivered` (mint ✓), `sent` (blue, awaiting receipt), `failed` (red ✗ with error tooltip on hover)
+
+#### Add patient — booking date field
+- "Senaste bokning" date picker added to the add patient modal
+- API route accepts `last_booking_at` and stores it — manually added patients can now be set as "Redo" immediately
+- Fixes the "Ingen giltig bokning" skip for manually added test patients
 
 ### Recently completed (2026-05-04 — session 3)
 
