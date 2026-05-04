@@ -56,7 +56,7 @@ export function getNextSequence(
 
   const cycleLogs = logsInCurrentCycle(patient.id, logs);
   const sentInCycle = cycleLogs.filter(
-    (l) => l.status === "sent" || l.status === "dry_run"
+    (l) => l.status === "sent" || l.status === "dry_run" || l.status === "delivered"
   );
   const maxSentSeq = sentInCycle.reduce(
     (max, l) => Math.max(max, l.sequence_number ?? 0),

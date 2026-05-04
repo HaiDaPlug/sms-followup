@@ -7,6 +7,8 @@ export async function POST(request: Request) {
   const full_name = String(body.full_name ?? "").trim();
   const phone = String(body.phone ?? "").trim() || null;
   const email = String(body.email ?? "").trim().toLowerCase() || null;
+  const last_booking_raw = String(body.last_booking_at ?? "").trim();
+  const last_booking_at = last_booking_raw ? new Date(last_booking_raw).toISOString() : null;
 
   if (!full_name) {
     return NextResponse.json({ error: "Namn krävs" }, { status: 400 });
@@ -28,7 +30,7 @@ export async function POST(request: Request) {
     phone,
     normalized_phone,
     email: email && email.includes("@") ? email : null,
-    last_booking_at: null,
+    last_booking_at,
     latest_treatment: null,
     has_future_booking: false,
     do_not_contact: false,

@@ -8,6 +8,7 @@ const FIELDS: Field[] = [
   { label: "Namn", name: "full_name", placeholder: "För- och efternamn", required: true },
   { label: "Telefon", name: "phone", type: "tel", placeholder: "t.ex. 0701234567" },
   { label: "E-post", name: "email", type: "email", placeholder: "namn@exempel.se" },
+  { label: "Senaste bokning", name: "last_booking_at", type: "date", placeholder: "" },
 ];
 
 export function AddPatientButton() {

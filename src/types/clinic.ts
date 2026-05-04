@@ -1,7 +1,7 @@
 export type BookingStatus = "Booked" | "Cancelled" | "Unknown" | string;
 export type ReviewStatus = "open" | "resolved" | "ignored";
 export type ReviewSeverity = "low" | "medium" | "high";
-export type ReminderLogStatus = "sent" | "failed" | "dry_run" | "skipped" | "cycle_reset";
+export type ReminderLogStatus = "sent" | "delivered" | "failed" | "dry_run" | "skipped" | "cycle_reset";
 
 export type Patient = {
   id: string;
