@@ -86,16 +86,14 @@ async function sendWith46Elks({ to, message }: SendSmsInput): Promise<SendSmsRes
       },
       body: form
     });
-    const payload = (await response.json().catch(() => ({}))) as {
-      id?: string;
-      error?: string;
-      message?: string;
-    };
+    const rawText = await response.text();
+    let payload: { id?: string; error?: string; message?: string } = {};
+    try { payload = JSON.parse(rawText); } catch { /* not JSON */ }
 
     if (!response.ok) {
       return {
         success: false,
-        error: payload.error ?? payload.message ?? `46elks returned ${response.status}`
+        error: `46elks ${response.status}: ${payload.error ?? payload.message ?? rawText}`
       };
     }
 
