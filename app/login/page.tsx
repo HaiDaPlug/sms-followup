@@ -1,4 +1,5 @@
 import { LoginForm } from "@/components/LoginForm";
+import { LoginLeftPanel } from "@/components/LoginLeftPanel";
 
 export const metadata = { title: "Logga in – Osteopaticentrum" };
 
@@ -69,7 +70,7 @@ export default async function LoginPage({
           animation: fadeUp 0.7s cubic-bezier(0.22,1,0.36,1) 0.1s forwards;
         }
         .login-logo img {
-          height: 48px;
+          height: 64px;
           filter: brightness(0) invert(1);
           opacity: 0.92;
         }
@@ -196,29 +197,7 @@ export default async function LoginPage({
 
       <div className="login-shell">
         {/* Left — brand panel */}
-        <div className="login-left">
-          <div className="login-left-noise" />
-          <div className="login-left-glow" />
-          <div className="login-left-glow-2" />
-
-          <div className="login-logo">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/osteopaticentrum.svg" alt="Osteopaticentrum" />
-          </div>
-
-          <div className="login-left-body">
-            <p className="login-tagline">
-              Rörelse är<br /><em>medicinens</em><br />ursprung.
-            </p>
-            <p className="login-desc">
-              Patienthantering och automatiska SMS‑påminnelser för Osteopaticentrum Borås.
-            </p>
-          </div>
-
-          <div className="login-left-footer">
-            Osteopaticentrum · Borås · Sverige
-          </div>
-        </div>
+        <LoginLeftPanel />
 
         {/* Right — form panel */}
         <div className="login-right">

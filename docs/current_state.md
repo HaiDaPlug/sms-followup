@@ -1,7 +1,7 @@
 # Current State — Clinic Rebooking Reminder System
 
-**Last updated:** 2026-05-03 (patients page redesign + UX polish)
-**Phase:** Supabase live, branding applied, deployed to Vercel via GitHub. 46elks credentials added locally. Dashboard modals, SMS-historik page, pagination, dynamic SMS steps, and failed SMS review loop complete.
+**Last updated:** 2026-05-04 (auth gate + login redesign + patient delete/reactivate)
+**Phase:** Supabase Auth live. Login page with particle field, route protection middleware, patient delete + DNC toggle, 46elks error detail surfaced in logs.
 
 ---
 
@@ -15,7 +15,7 @@ A clinic rebooking engine built for Osteopaticentrum (Borås) that:
 5. Resets a patient's sequence when a new booking arrives via webhook, preserving full history
 6. Logs all activity and surfaces data quality issues for review
 
-One deployment per clinic. No multi-tenancy, no auth — intentional for V1.
+One deployment per clinic. Supabase Auth gate in place. Multi-tenancy planned for V2.
 
 > **Future idea — white-label:** Upload a logo, the app extracts the brand colors and applies them automatically. Each clinic gets their own look without any manual theming. Potential path to selling this as a product rather than a bespoke deployment.
 
@@ -28,7 +28,8 @@ One deployment per clinic. No multi-tenancy, no auth — intentional for V1.
 - **Next.js 15** App Router + TypeScript, React 19
 - **Supabase** (Stockholm region, project `updomqqgivylpunzuanw`) — live, migration applied
 - **Storage**: all data in Supabase — `patients`, `bookings`, `reminder_settings`, `reminder_logs`, `review_items`
-- **SMS**: 46elks adapter in `src/lib/sms/provider.ts` — credentials set locally, not yet in Vercel
+- **SMS**: 46elks adapter in `src/lib/sms/provider.ts` — credentials set locally + Vercel. Error responses now surface full 46elks API text in failed logs.
+- **Auth**: Supabase Auth via `@supabase/ssr`. Middleware at `middleware.ts` protects all `/app/*` and `/api/*` routes. Cron + webhook routes retain secret-based auth.
 - **Deployment**: Vercel, connected to `github.com/HaiDaPlug/sms-followup`, auto-deploys on push to `main`
 - **Cron**: Vercel cron at `0 8 * * *` → `/api/cron/daily-reminders`
 - `typecheck` and `build` both pass clean
@@ -41,13 +42,15 @@ One deployment per clinic. No multi-tenancy, no auth — intentional for V1.
 |---|---|---|---|
 | `SUPABASE_URL` | ✅ | ✅ | Set |
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | ✅ | Set |
-| `SMS_PROVIDER` | ✅ | — | `46elks` |
-| `FORTYSIX_ELKS_USERNAME` | ✅ | — | Set locally, needed in Vercel for live SMS |
-| `FORTYSIX_ELKS_PASSWORD` | ✅ | — | Set locally, needed in Vercel for live SMS |
-| `FORTYSIX_ELKS_FROM` | ✅ | — | Sender name/number |
-| `TEST_SMS_TO` | placeholder | — | For `/api/reminders/test` |
-| `CRON_SECRET` | placeholder | — | Security — set before public URL |
-| `BOKADIREKT_WEBHOOK_SECRET` | placeholder | — | Security — set before public URL |
+| `NEXT_PUBLIC_SUPABASE_URL` | ✅ | ✅ | Required for auth browser client |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | ✅ | Required for auth browser client |
+| `SMS_PROVIDER` | ✅ | ✅ | `46elks` |
+| `FORTYSIX_ELKS_USERNAME` | ✅ | ✅ | Set |
+| `FORTYSIX_ELKS_PASSWORD` | ✅ | ✅ | Set |
+| `FORTYSIX_ELKS_FROM` | ✅ | ✅ | `OsteopatiC` |
+| `TEST_SMS_TO` | ✅ | — | For `/api/reminders/test` |
+| `CRON_SECRET` | ✅ | — | Set before public URL |
+| `BOKADIREKT_WEBHOOK_SECRET` | — | — | Set before webhook goes live |
 
 ---
 
@@ -190,17 +193,49 @@ src/lib/reminders/process.ts
 - [ ] Hit "Skicka SMS" on your own row — confirm delivery end-to-end
 - [ ] Send one test SMS via `/api/reminders/test` as a secondary check
 
-### 2. Wire in BokaDirekt webhooks (automatic booking updates)
+### 2. Multi-tenant portal with per-user isolated data (next priority after webhooks)
+- [x] Add auth (Supabase Auth) — login gate in place
+- [ ] Add a `clinic_id` foreign key to all tables (`patients`, `bookings`, `reminder_settings`, `reminder_logs`, `review_items`)
+- [ ] All queries scoped by `clinic_id` — no clinic can see another's data
+- [ ] Shared portal at the root domain — clinics log in and land on their own isolated dashboard
+- [ ] Each clinic manages their own settings, SMS templates, and patient list independently
+- [ ] See `docs/scalability.md` for the full architectural breakdown
+- [ ] Prerequisite for selling this to multiple clinics without manual re-deploys
+
+### 3. Wire in BokaDirekt webhooks (automatic booking updates)
 - [ ] Get a real webhook payload sample from BokaDirekt to confirm field names (`phone`/`Phone`/`mobilnummer` etc.)
 - [ ] Update `src/lib/webhooks/bokadirekt.ts` field mapping to match real payload
 - [ ] Set `BOKADIREKT_WEBHOOK_SECRET` in Vercel and verify signature check in `/api/webhooks/bokadirekt`
 - [ ] Register the webhook URL with BokaDirekt pointing to `https://<your-domain>/api/webhooks/bokadirekt`
 - [ ] Test: make a real booking and confirm patient `last_booking_at` updates and cycle resets automatically
 
-### Before sharing the URL publicly
+### 4. Domain
+- [ ] Decide on a domain for the portal (e.g. app.khyte.se, rebooking.se, or clinic-specific subdomain)
+- [ ] Add custom domain in Vercel once decided
+
+### 5. Before sharing the URL publicly
 - [ ] Set `CRON_SECRET` — without it anyone can trigger mass SMS sends
 - [ ] Set `BOKADIREKT_WEBHOOK_SECRET` — see priority 2 above
 - [ ] Add auth to `/api/settings` and `/api/reminders/send`
+
+### Recently completed (2026-05-04 — session 3)
+
+#### Auth gate
+- Supabase Auth via `@supabase/ssr` — cookie-based sessions, works with Next.js 15 App Router
+- `middleware.ts` at project root — protects all `/app/*` and `/api/*`, cron/webhook routes bypass via secret auth
+- `/login` page — split-screen layout: dark green left panel with interactive canvas particle field (nervous system aesthetic), white right panel with Cormorant Garamond heading and DM Sans inputs
+- Particle field: 72 nodes (white + mint), lines connect within 120px, cursor repels nearby particles, proximity glow on hover
+- `LogoutButton` in sidebar footer — signs out and redirects to `/login`
+- Browser client (`src/lib/supabase/browser.ts`) + server client (`src/lib/supabase/server.ts`) using anon key
+- Requires `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in env
+
+#### Patient management
+- **Delete patient** — `DELETE /api/patients/[id]` permanently removes patient from Supabase. Confirm dialog before firing.
+- **DNC toggle** — "Kontakta ej" button now toggles: shows green "Återaktivera" when patient is already DNC, calls `/reactivate` endpoint
+- `PatientActions` receives `doNotContact` prop from patients page — no extra fetch needed
+
+#### SMS debugging
+- 46elks error responses now surface full raw API text in failed SMS logs instead of generic status code
 
 ### Recently completed (2026-05-03 — session 2)
 
