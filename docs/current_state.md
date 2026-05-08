@@ -1,7 +1,7 @@
 # Current State — Clinic Rebooking Reminder System
 
-**Last updated:** 2026-05-04 (session 5 — hardening, SMS history redesign, patient search fix)
-**Phase:** SMS loop production-hardened. DB constraints applied. Per-patient SMS popup. History page redesigned with card layout + real-time filtering.
+**Last updated:** 2026-05-08 (session 6 — pilot hardening, emoji SMS editor, incoming SMS inbox)
+**Phase:** Pilot-ready. Import is robust and idempotent. Daily cron refreshes stale flags. Incoming SMS from the virtual number (+46766864658) lands in an inbox with inline reply.
 
 ---
 
@@ -27,7 +27,7 @@ One deployment per clinic. Supabase Auth gate in place. Multi-tenancy planned fo
 
 - **Next.js 15** App Router + TypeScript, React 19
 - **Supabase** (Stockholm region, project `updomqqgivylpunzuanw`) — live, migration applied
-- **Storage**: all data in Supabase — `patients`, `bookings`, `reminder_settings`, `reminder_logs`, `review_items`
+- **Storage**: all data in Supabase — `patients`, `bookings`, `reminder_settings`, `reminder_logs`, `review_items`, `daily_snapshots`, `incoming_sms`
 - **SMS**: 46elks adapter in `src/lib/sms/provider.ts` — credentials set locally + Vercel. Error responses now surface full 46elks API text in failed logs.
 - **Auth**: Supabase Auth via `@supabase/ssr`. Middleware at `middleware.ts` protects all `/app/*` and `/api/*` routes. Cron + webhook routes retain secret-based auth.
 - **Deployment**: Vercel, connected to `github.com/HaiDaPlug/sms-followup`, auto-deploys on push to `main`
@@ -48,6 +48,7 @@ One deployment per clinic. Supabase Auth gate in place. Multi-tenancy planned fo
 | `FORTYSIX_ELKS_USERNAME` | ✅ | ✅ | Set |
 | `FORTYSIX_ELKS_PASSWORD` | ✅ | ✅ | Set |
 | `FORTYSIX_ELKS_FROM` | ✅ | ✅ | `OsteopatiC` |
+| `FORTYSIX_ELKS_VIRTUAL_NUMBER` | ⚠️ | ⚠️ | `+46766864658` — add to both |
 | `TEST_SMS_TO` | ✅ | — | For `/api/reminders/test` |
 | `CRON_SECRET` | ✅ | — | Set before public URL |
 | `BOKADIREKT_WEBHOOK_SECRET` | — | — | Set before webhook goes live |
@@ -64,7 +65,8 @@ One deployment per clinic. Supabase Auth gate in place. Multi-tenancy planned fo
 | `/app/sms-history` | Working | All contacted patients, full SMS log per patient, send + remove/reactivate actions |
 | `/app/import` | Working | Upload BokaDirekt CSV, Swedish summary labels |
 | `/app/review` | Working | Review queue with resolve/ignore actions |
-| `/app/settings` | Working | 3 SMS templates, timing, dry-run toggle with live label update |
+| `/app/settings` | Working | 3 SMS templates, timing, dry-run toggle with live label update, emoji picker per template, live UCS-2/character counter |
+| `/app/inbox` | Working | Incoming SMS from virtual number — filter obesvarade/alla, inline reply |
 
 ### Dashboard — interactive KPI modals
 All four KPI cards are clickable and open modals:
@@ -117,6 +119,9 @@ All modals share:
 | `POST /api/review/[id]` | Working | Resolve/ignore review items |
 | `GET /api/cron/daily-reminders` | Working | Daily batch runner |
 | `POST /api/webhooks/bokadirekt` | Working | Import + cycle reset |
+| `POST /api/webhooks/sms-incoming` | Working | Receives incoming SMS from 46elks virtual number, matches to patient by phone |
+| `POST /api/sms/reply` | Working | Sends reply via 46elks, marks thread as replied |
+| `GET /api/sms/inbox` | Working | Returns incoming SMS joined with patient names |
 | `DELETE /api/logs/:id` | Working | Delete single log entry |
 | `DELETE /api/logs` | Working | Clear logs by patientId or all (confirm:true) |
 
@@ -218,6 +223,34 @@ src/lib/reminders/process.ts
 - [ ] Set `CRON_SECRET` — without it anyone can trigger mass SMS sends
 - [ ] Set `BOKADIREKT_WEBHOOK_SECRET` — see priority 2 above
 - [ ] Add auth to `/api/settings` and `/api/reminders/send`
+
+### Recently completed (2026-05-08 — session 6)
+
+#### Import robustness
+- `onConflict` fixed to `external_booking_id` — re-importing same CSV no longer throws unique constraint violation
+- `bookingMap` keyed by `external_booking_id` — duplicate rows in CSV no longer cause "ON CONFLICT DO UPDATE command cannot affect row a second time"
+- `review_items` dedup replaced partial-index upsert (unsupported) with fetch-then-insert pattern
+- `readStoreForImport()` — slim query (no logs/review_items/full booking columns) fixes import timeout on large DBs
+
+#### Pilot hardening (migration 005)
+- `skip_reason` enum column on `reminder_logs` — machine-readable skip reasons, queryable without text parsing
+- `daily_snapshots` table — one row per cron run: full cohort breakdown (ready/waiting/future_booking/…) + SMS sent/dry_run/failed counts. Full time series after 30 days of pilot.
+- Index on `bookings(patient_id, booking_at)` for fast live future-booking checks
+- `has_future_booking` refreshed from live bookings at the start of every cron run — stored flag can no longer go stale
+- N+1 eliminated: `processDailyReminders` loads store once and passes it down, no per-patient DB refetch
+
+#### Incoming SMS inbox (migration 006)
+- `incoming_sms` table: stores all messages received on virtual number +46766864658, matched to patient by normalized phone
+- `POST /api/webhooks/sms-incoming` — 46elks webhook, validates `to` against `FORTYSIX_ELKS_VIRTUAL_NUMBER`, auto-matches sender to patient
+- `POST /api/sms/reply` — sends reply via 46elks, marks thread as `replied_at`
+- `/app/inbox` page — filter tabs (Obesvarade / Alla), inline reply box, Ctrl+Enter to send, replied thread shows sent reply preview
+- **To activate:** set `FORTYSIX_ELKS_VIRTUAL_NUMBER=+46766864658` in `.env.local` and Vercel, then point 46elks SMS URL to `https://yourdomain.com/api/webhooks/sms-incoming`
+
+#### SMS template editor
+- Emoji picker per template: 😊 button, 3 tabs (Vanliga/Hälsa/Tid), search box, picker stays open for multi-insert
+- Live character counter: expands `{{placeholders}}` with example values before counting (shows `~235 tecken` not raw template length)
+- UCS-2 detection: badge shows which specific character triggered non-GSM-7 encoding (`Orsakas av: "–"`)
+- Correct UCS-2 billing unit counting: supplementary emoji (e.g. 😊 = U+1F600) counted as 2 units, not 1
 
 ### Recently completed (2026-05-04 — session 5)
 
@@ -337,6 +370,12 @@ alter table reminder_settings add column if not exists sms_steps jsonb;
 
 -- 004 (session 5)
 -- Run supabase/migrations/004_reminder_logs_hardening.sql
+
+-- 005 (session 6)
+-- Run supabase/migrations/005_robustness.sql
+
+-- 006 (session 6)
+-- Run supabase/migrations/006_incoming_sms.sql
 ```
 
 ### Known limitations
