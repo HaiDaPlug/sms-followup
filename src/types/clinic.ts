@@ -2,6 +2,15 @@ export type BookingStatus = "Booked" | "Cancelled" | "Unknown" | string;
 export type ReviewStatus = "open" | "resolved" | "ignored";
 export type ReviewSeverity = "low" | "medium" | "high";
 export type ReminderLogStatus = "sent" | "delivered" | "failed" | "dry_run" | "skipped" | "cycle_reset";
+export type SkipReason =
+  | "future_booking"
+  | "missing_phone"
+  | "do_not_contact"
+  | "needs_review"
+  | "no_valid_booking"
+  | "waiting"
+  | "unresolved_placeholder"
+  | "sequence_complete";
 
 export type Patient = {
   id: string;
@@ -73,9 +82,46 @@ export type ReminderLog = {
   /** True when a new booking reset this patient's cycle */
   is_cycle_reset: boolean;
   provider_message_id: string | null;
+  /** Machine-readable skip reason — set whenever status is "skipped" */
+  skip_reason: SkipReason | null;
   error: string | null;
   sent_at: string | null;
   created_at: string;
+};
+
+export type InboxRow = IncomingSms & { patient_name: string | null };
+
+export type IncomingSms = {
+  id: string;
+  from_number: string;
+  to_number: string;
+  message: string;
+  received_at: string;
+  patient_id: string | null;
+  replied_at: string | null;
+  reply_message: string | null;
+  reply_provider_id: string | null;
+  created_at: string;
+};
+
+export type DailySnapshot = {
+  id: string;
+  snapped_at: string;
+  total_patients: number;
+  ready: number;
+  waiting: number;
+  sent_complete: number;
+  future_booking: number;
+  missing_phone: number;
+  do_not_contact: number;
+  needs_review: number;
+  no_valid_booking: number;
+  sms_sent: number;
+  sms_dry_run: number;
+  sms_failed: number;
+  sms_skipped: number;
+  dry_run_mode: boolean;
+  is_active: boolean;
 };
 
 export type ReviewItem = {

@@ -38,6 +38,16 @@ const navItems = [
     )
   },
   {
+    href: "/app/inbox",
+    label: "Inkorg",
+    icon: (
+      <svg className="nav-icon" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={1.75}>
+        <path d="M2 3h12a1 1 0 011 1v7a1 1 0 01-1 1H5l-3 2V4a1 1 0 011-1z" strokeLinejoin="round" />
+        <path d="M5 7h6M5 9.5h4" strokeLinecap="round" />
+      </svg>
+    )
+  },
+  {
     href: "/app/review",
     label: "Granskning",
     icon: (

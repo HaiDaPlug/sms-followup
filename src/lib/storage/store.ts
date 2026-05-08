@@ -2,6 +2,8 @@ import { supabase } from "@/lib/supabase/client";
 import type {
   Booking,
   ClinicStore,
+  DailySnapshot,
+  IncomingSms,
   Patient,
   ReminderLog,
   ReminderSettings,
@@ -50,6 +52,19 @@ function throwOnError<T>(data: T | null, error: { message: string } | null, labe
 // ---------------------------------------------------------------------------
 // Read full store (used by eligibility / process modules that need everything)
 // ---------------------------------------------------------------------------
+
+export async function readStoreForImport(): Promise<Pick<ClinicStore, "patients" | "bookings">> {
+  const [patients, bookings] = await Promise.all([
+    supabase.from("patients").select("*"),
+    supabase.from("bookings").select("id,external_booking_id,patient_id,booking_at,treatment,status,created_at")
+  ]);
+  throwOnError(patients.data, patients.error, "patients select");
+  throwOnError(bookings.data, bookings.error, "bookings select");
+  return {
+    patients: (patients.data ?? []) as Patient[],
+    bookings: (bookings.data ?? []) as Booking[]
+  };
+}
 
 export async function readStore(): Promise<ClinicStore> {
   const [patients, bookings, settings, logs, reviewItems] = await Promise.all([
@@ -150,6 +165,7 @@ export async function resetPatientCycle(
     sequence_number: null,
     is_cycle_reset: true,
     provider_message_id: null,
+    skip_reason: null,
     error: null,
     sent_at: null
   });
@@ -243,7 +259,7 @@ export async function bulkUpsertBookings(bookings: Booking[]): Promise<Booking[]
   if (bookings.length === 0) return [];
   const { data, error } = await supabase
     .from("bookings")
-    .upsert(bookings, { onConflict: "id" })
+    .upsert(bookings, { onConflict: "external_booking_id" })
     .select();
   throwOnError(data, error, "bookings bulk upsert");
   return (data ?? []) as Booking[];
@@ -253,16 +269,25 @@ export async function bulkAddReviewItems(
   items: Omit<ReviewItem, "id" | "created_at" | "updated_at">[]
 ): Promise<void> {
   if (items.length === 0) return;
-  // Upsert on content_hash so re-importing the same CSV never duplicates review items.
-  // Items without a hash (shouldn't happen) fall back to plain insert.
+
   const withHash = items.filter((i) => i.content_hash);
   const withoutHash = items.filter((i) => !i.content_hash);
+
   if (withHash.length > 0) {
-    const { error } = await supabase
+    const hashes = withHash.map((i) => i.content_hash as string);
+    const { data: existing, error: fetchError } = await supabase
       .from("review_items")
-      .upsert(withHash, { onConflict: "content_hash", ignoreDuplicates: true });
-    if (error) throw new Error(`Supabase review_items upsert: ${error.message}`);
+      .select("content_hash")
+      .in("content_hash", hashes);
+    if (fetchError) throw new Error(`Supabase review_items fetch: ${fetchError.message}`);
+    const existingSet = new Set((existing ?? []).map((r: { content_hash: string }) => r.content_hash));
+    const newItems = withHash.filter((i) => !existingSet.has(i.content_hash as string));
+    if (newItems.length > 0) {
+      const { error } = await supabase.from("review_items").insert(newItems);
+      if (error) throw new Error(`Supabase review_items insert: ${error.message}`);
+    }
   }
+
   if (withoutHash.length > 0) {
     const { error } = await supabase.from("review_items").insert(withoutHash);
     if (error) throw new Error(`Supabase review_items insert: ${error.message}`);
@@ -294,4 +319,73 @@ export async function updateStore<T>(
   _mutator: (store: ClinicStore) => T | Promise<T>
 ): Promise<T> {
   throw new Error("updateStore is not supported with Supabase. Use targeted operations.");
+}
+
+// ---------------------------------------------------------------------------
+// Daily snapshots
+// ---------------------------------------------------------------------------
+
+export async function insertDailySnapshot(
+  snapshot: Omit<DailySnapshot, "id" | "snapped_at">
+): Promise<void> {
+  const { error } = await supabase.from("daily_snapshots").insert(snapshot);
+  if (error) throw new Error(`Supabase daily_snapshots insert: ${error.message}`);
+}
+
+export async function getDailySnapshots(limitDays = 90): Promise<DailySnapshot[]> {
+  const since = new Date(Date.now() - limitDays * 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from("daily_snapshots")
+    .select("*")
+    .gte("snapped_at", since)
+    .order("snapped_at", { ascending: false });
+  if (error) throw new Error(`Supabase daily_snapshots select: ${error.message}`);
+  return (data ?? []) as DailySnapshot[];
+}
+
+// ---------------------------------------------------------------------------
+// Incoming SMS
+// ---------------------------------------------------------------------------
+
+export async function insertIncomingSms(
+  sms: Omit<IncomingSms, "created_at">
+): Promise<IncomingSms> {
+  const { data, error } = await supabase
+    .from("incoming_sms")
+    .upsert(sms, { onConflict: "id" })
+    .select()
+    .single();
+  if (error) throw new Error(`Supabase incoming_sms insert: ${error.message}`);
+  return data as IncomingSms;
+}
+
+export async function getIncomingSms(limit = 100): Promise<IncomingSms[]> {
+  const { data, error } = await supabase
+    .from("incoming_sms")
+    .select("*")
+    .order("received_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Supabase incoming_sms select: ${error.message}`);
+  return (data ?? []) as IncomingSms[];
+}
+
+export async function getIncomingSmsForPatient(patientId: string): Promise<IncomingSms[]> {
+  const { data, error } = await supabase
+    .from("incoming_sms")
+    .select("*")
+    .eq("patient_id", patientId)
+    .order("received_at", { ascending: false });
+  if (error) throw new Error(`Supabase incoming_sms select: ${error.message}`);
+  return (data ?? []) as IncomingSms[];
+}
+
+export async function markIncomingSmsReplied(
+  id: string,
+  reply: { reply_message: string; reply_provider_id: string | null; replied_at: string }
+): Promise<void> {
+  const { error } = await supabase
+    .from("incoming_sms")
+    .update(reply)
+    .eq("id", id);
+  if (error) throw new Error(`Supabase incoming_sms update: ${error.message}`);
 }

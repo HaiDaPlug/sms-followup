@@ -1,10 +1,146 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { ReminderSettings, SmsStep } from "@/types/clinic";
 import { resolveSteps } from "@/lib/reminders/steps";
 
 const VARIABLES_HINT = "{{firstName}}  {{fullName}}  {{lastBookingDate}}  {{bookingLink}}  {{clinicName}}";
+
+// GSM-7 basic charset. Every character listed here is a single GSM-7 unit
+// except those also in GSM7_EXTENDED, which consume 2 units (escape + char).
+// Anything outside this set forces UCS-2 encoding for the whole message.
+const GSM7_CHARS = new Set([
+  // Basic table
+  ..."@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1BÆæßÉ !\"#¤%&'()*+,-./:;<=>?¡",
+  ..."ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑܧ¿",
+  ..."abcdefghijklmnopqrstuvwxyzäöñüà",
+  ..."0123456789",
+  // Extension table (each costs 2 units)
+  ..."[]{}\\^~|€",
+]);
+
+// Extension table chars each count as 2 GSM-7 units (ESC + char)
+const GSM7_EXTENDED = new Set(..."[]{}\\^~|€");
+
+// Count UCS-2 code units (each BMP char = 1, each emoji/supplementary = 2)
+function ucs2Length(text: string): number {
+  let n = 0;
+  for (const cp of text) {
+    n += (cp.codePointAt(0) ?? 0) > 0xFFFF ? 2 : 1;
+  }
+  return n;
+}
+
+// Substitute placeholders with realistic example values so the counter
+// reflects what will actually be sent, not the raw template string.
+const PLACEHOLDER_EXAMPLES: Record<string, string> = {
+  "{{firstName}}":       "Anna",
+  "{{fullName}}":        "Anna Svensson",
+  "{{lastName}}":        "Svensson",
+  "{{lastBookingDate}}": "2026-04-01",
+  "{{bookingLink}}":     "https://bokadirekt.se/osteopaticentrum",
+  "{{clinicName}}":      "Osteopati Centrum",
+};
+
+function expandTemplate(template: string): string {
+  return Object.entries(PLACEHOLDER_EXAMPLES).reduce(
+    (t, [key, val]) => t.replaceAll(key, val),
+    template
+  );
+}
+
+function findFirstNonGsm7(text: string): string | null {
+  for (const ch of text) {
+    if (!GSM7_CHARS.has(ch)) return ch;
+  }
+  return null;
+}
+
+function analyzeSms(text: string) {
+  let isUcs2 = false;
+  let firstOffender: string | null = null;
+  for (const ch of text) {
+    if (!GSM7_CHARS.has(ch)) { isUcs2 = true; firstOffender = ch; break; }
+  }
+
+  let charCount: number;
+  if (isUcs2) {
+    charCount = ucs2Length(text);
+  } else {
+    charCount = 0;
+    for (const ch of text) {
+      charCount += GSM7_EXTENDED.has(ch) ? 2 : 1;
+    }
+  }
+
+  const singleLimit = isUcs2 ? 70 : 160;
+  const multiLimit  = isUcs2 ? 67 : 153;
+
+  const parts = charCount <= singleLimit ? 1 : Math.ceil(charCount / multiLimit);
+  const used  = parts === 1 ? charCount : charCount - multiLimit * (parts - 1);
+  const remaining = (parts === 1 ? singleLimit : multiLimit) - used;
+
+  return { charCount, parts, remaining, isUcs2, firstOffender };
+}
+
+function SmsCounter({ template }: { template: string }) {
+  if (!template.trim()) return null;
+
+  const expanded = expandTemplate(template);
+  const { charCount, parts, remaining, isUcs2, firstOffender } = analyzeSms(expanded);
+
+  // Also check the raw template for non-GSM7 so we can warn about it directly
+  const rawOffender = findFirstNonGsm7(template);
+
+  const multiPart = parts > 1;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: 8,
+        fontSize: 11.5,
+        color: isUcs2 ? "var(--amber)" : "var(--text-muted)",
+        fontVariantNumeric: "tabular-nums",
+      }}>
+        <span title="Beräknat efter att variabler ersatts med exempelvärden">
+          ~{charCount} tecken
+        </span>
+        <span style={{ color: "var(--border)" }}>·</span>
+        <span style={{ fontWeight: multiPart ? 600 : 400, color: multiPart ? "var(--text)" : undefined }}>
+          {parts} {parts === 1 ? "SMS-del" : "SMS-delar"}
+        </span>
+        <span style={{ color: "var(--border)" }}>·</span>
+        <span>{remaining} kvar i sista</span>
+        {isUcs2 && (
+          <span style={{
+            background: "var(--amber-bg)",
+            border: "1px solid var(--amber-border)",
+            color: "var(--amber)",
+            borderRadius: 3,
+            padding: "1px 6px",
+            fontWeight: 700,
+            fontSize: 10.5,
+          }}>
+            UCS-2 · max {parts === 1 ? 70 : 67}/del
+          </span>
+        )}
+      </div>
+      {isUcs2 && rawOffender && (
+        <div style={{ fontSize: 11, color: "var(--amber)", opacity: 0.85 }}>
+          Orsakas av: &ldquo;{rawOffender}&rdquo; — inte ett GSM-7-tecken
+        </div>
+      )}
+      {isUcs2 && !rawOffender && firstOffender && (
+        <div style={{ fontSize: 11, color: "var(--amber)", opacity: 0.85 }}>
+          Orsakas av exempelvärde: &ldquo;{firstOffender}&rdquo;
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SectionHeader({ title, description }: { title: string; description: string }) {
   return (
@@ -95,6 +231,154 @@ function DayChip({ value, onChange }: { value: number; onChange: (v: number) => 
   );
 }
 
+// ── Emoji picker ─────────────────────────────────────────────────────────────
+
+const EMOJI_GROUPS = [
+  { label: "Vanliga", emojis: ["😊","😄","😁","🙏","👍","❤️","✨","🌟","💪","🎉","👋","😍","🥰","😘","💖","🔥","✅","⭐","🌸","💐"] },
+  { label: "Hälsa",  emojis: ["💆","🧘","💉","🩺","🏥","💊","🌿","🍃","🌱","💚","🫁","🦷","👁️","🫀","🤸","🧠","🩹","🩻","🫶","🤍"] },
+  { label: "Tid",    emojis: ["📅","📆","⏰","🕐","🗓️","⌚","⏳","🔔","📣","💬","📩","📲","✉️","📋","🗒️","🖊️","📌","🔗","📎","🗂️"] },
+];
+const ALL_EMOJIS = EMOJI_GROUPS.flatMap((g) => g.emojis);
+
+function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState(0);
+  const [search, setSearch] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setTimeout(() => searchRef.current?.focus(), 30);
+    function close(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  const visibleEmojis = search.trim()
+    ? ALL_EMOJIS.filter((e) => e.includes(search.trim()))
+    : EMOJI_GROUPS[tab].emojis;
+
+  return (
+    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
+      <button
+        type="button"
+        onClick={() => { setOpen((o) => !o); setSearch(""); }}
+        title="Lägg till emoji"
+        style={{
+          background: "none",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          padding: "3px 8px",
+          fontSize: 15,
+          cursor: "pointer",
+          lineHeight: 1,
+          minHeight: "unset",
+          color: "var(--text-muted)",
+        }}
+      >
+        😊
+      </button>
+
+      {open && (
+        <div style={{
+          position: "absolute",
+          top: "calc(100% + 6px)",
+          left: 0,
+          zIndex: 100,
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+          width: 292,
+          padding: "10px 10px 12px",
+        }}>
+          {/* Search */}
+          <input
+            ref={searchRef}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Sök emoji…"
+            style={{
+              width: "100%",
+              marginBottom: 8,
+              fontSize: 12,
+              padding: "5px 8px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border)",
+              background: "var(--surface-sub)",
+              color: "var(--text)",
+              boxSizing: "border-box",
+            }}
+          />
+
+          {/* Tabs — hidden during search */}
+          {!search.trim() && (
+            <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+              {EMOJI_GROUPS.map((g, i) => (
+                <button
+                  key={g.label}
+                  type="button"
+                  onClick={() => setTab(i)}
+                  style={{
+                    flex: 1,
+                    fontSize: 11,
+                    fontWeight: tab === i ? 700 : 400,
+                    padding: "3px 0",
+                    border: "none",
+                    borderBottom: tab === i ? "2px solid var(--accent)" : "2px solid transparent",
+                    background: "none",
+                    color: tab === i ? "var(--accent)" : "var(--text-muted)",
+                    cursor: "pointer",
+                    minHeight: "unset",
+                    borderRadius: 0,
+                  }}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Grid */}
+          {visibleEmojis.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--text-muted)", textAlign: "center", padding: "10px 0" }}>
+              Inga träffar
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(10, 1fr)", gap: 2 }}>
+              {visibleEmojis.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => onPick(emoji)}
+                  style={{
+                    fontSize: 18,
+                    lineHeight: 1,
+                    padding: "4px 2px",
+                    border: "none",
+                    background: "none",
+                    cursor: "pointer",
+                    borderRadius: 4,
+                    minHeight: "unset",
+                    transition: "background 100ms",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-sub)"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Single SMS step card ──────────────────────────────────────────────────────
 
 function StepCard({
@@ -110,6 +394,26 @@ function StepCard({
   onChange: (s: SmsStep) => void;
   onRemove: () => void;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  function insertEmoji(emoji: string) {
+    const el = textareaRef.current;
+    if (!el) {
+      onChange({ ...step, template: step.template + emoji });
+      return;
+    }
+    const start = el.selectionStart ?? step.template.length;
+    const end = el.selectionEnd ?? start;
+    const next = step.template.slice(0, start) + emoji + step.template.slice(end);
+    onChange({ ...step, template: next });
+    // Use raw .length (UTF-16 code units) for selectionRange — same as browser's internal offset
+    const newCursor = start + emoji.length;
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(newCursor, newCursor);
+    });
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -135,10 +439,15 @@ function StepCard({
         )}
       </div>
       <textarea
+        ref={textareaRef}
         value={step.template}
         onChange={(e) => onChange({ ...step, template: e.target.value })}
         style={{ minHeight: 100 }}
       />
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <EmojiPicker onPick={insertEmoji} />
+        <SmsCounter template={step.template} />
+      </div>
       <div style={{
         background: "var(--surface-sub)",
         border: "1px solid var(--border)",

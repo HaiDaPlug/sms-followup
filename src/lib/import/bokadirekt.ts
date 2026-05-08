@@ -6,7 +6,7 @@ import {
   bulkUpsertPatients,
   createId,
   nowIso,
-  readStore
+  readStoreForImport
 } from "@/lib/data/repository";
 import { parseDelimited } from "./csv";
 import {
@@ -94,7 +94,7 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
   const rows = parseBokaDirektCsv(csvText);
 
   // Load existing data once — all matching is done in memory
-  const store = await readStore();
+  const store = await readStoreForImport();
   const patients = store.patients;
 
   // Index existing bookings by external_booking_id for O(1) lookup
@@ -214,12 +214,14 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
       updated_at: now
     };
 
-    bookingMap.set(bookingRow.id, bookingRow);
+    bookingMap.set(bookingRow.external_booking_id, bookingRow);
     if (!existingBooking) summary.importedBookings += 1;
 
     if (patient?.id) {
       const list = patientBookingRows.get(patient.id) ?? [];
-      list.push(bookingRow);
+      if (!list.some((b) => b.external_booking_id === bookingRow.external_booking_id)) {
+        list.push(bookingRow);
+      }
       patientBookingRows.set(patient.id, list);
     }
   }

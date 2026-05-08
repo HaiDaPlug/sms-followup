@@ -32,6 +32,7 @@ export async function POST(request: Request) {
       sequence_number: sequenceNumber,
       is_cycle_reset: false,
       provider_message_id: null,
+      skip_reason: null,
       error: null,
       sent_at: null,
     });
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
       sequence_number: sequenceNumber,
       is_cycle_reset: false,
       provider_message_id: null,
+      skip_reason: null,
       error,
       sent_at: null,
     });
@@ -68,6 +70,7 @@ export async function POST(request: Request) {
     sequence_number: sequenceNumber,
     is_cycle_reset: false,
     provider_message_id: result.providerMessageId ?? null,
+    skip_reason: null,
     error: result.error ?? null,
     sent_at: result.success ? new Date().toISOString() : null,
   });
