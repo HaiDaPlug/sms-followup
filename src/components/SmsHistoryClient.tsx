@@ -63,9 +63,79 @@ function TrashIcon() {
   );
 }
 
+// ── SMS message popup ─────────────────────────────────────────────────────────
+function SmsPopup({ log, onClose }: { log: LogRow; onClose: () => void }) {
+  const colors = chipColor(log.status);
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200,
+        background: "rgba(0,0,0,0.35)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+          padding: "24px 28px",
+          maxWidth: 480,
+          width: "90%",
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: colors.dot, flexShrink: 0 }} />
+            <span style={{ fontSize: 13, fontWeight: 700, color: colors.text }}>
+              {log.sequence_number ? `SMS ${log.sequence_number}` : log.status}
+            </span>
+            <span style={{ fontSize: 12, color: "var(--text-faint)" }}>
+              {formatTs(log.sent_at ?? log.created_at)}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-muted)", lineHeight: 1, padding: "0 4px" }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{
+          background: "var(--surface-sub)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          padding: "14px 16px",
+          fontSize: 13.5,
+          color: "var(--text)",
+          lineHeight: 1.65,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}>
+          {log.message || <span style={{ color: "var(--text-faint)" }}>Inget meddelandeinnehåll</span>}
+        </div>
+
+        {log.status === "failed" && log.error && (
+          <div style={{ fontSize: 12, color: "var(--red)", background: "var(--red-bg, #fdf0f0)", border: "1px solid var(--red-border, #f0d0d0)", borderRadius: "var(--radius-sm)", padding: "8px 12px" }}>
+            Fel: {log.error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Log chip ──────────────────────────────────────────────────────────────────
 function LogChip({ log, onDeleted }: { log: LogRow; onDeleted: () => void }) {
   const [deleting, setDeleting] = useState(false);
+  const [showPopup, setShowPopup] = useState(false);
   const colors = chipColor(log.status);
 
   const label = log.sequence_number
@@ -81,12 +151,17 @@ function LogChip({ log, onDeleted }: { log: LogRow; onDeleted: () => void }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{
-        display: "inline-flex", alignItems: "center", gap: 6,
-        background: colors.bg, border: `1px solid ${colors.border}`,
-        borderRadius: 20, padding: "3px 8px 3px 6px",
-        maxWidth: "fit-content",
-      }}>
+      {showPopup && <SmsPopup log={log} onClose={() => setShowPopup(false)} />}
+      <div
+        onClick={() => setShowPopup(true)}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          background: colors.bg, border: `1px solid ${colors.border}`,
+          borderRadius: 20, padding: "3px 8px 3px 6px",
+          maxWidth: "fit-content",
+          cursor: "pointer",
+        }}
+      >
         <span style={{ width: 6, height: 6, borderRadius: "50%", background: colors.dot, flexShrink: 0 }} />
         <span style={{ fontSize: 11.5, fontWeight: 600, color: colors.text, whiteSpace: "nowrap" }}>
           {label}
@@ -95,7 +170,7 @@ function LogChip({ log, onDeleted }: { log: LogRow; onDeleted: () => void }) {
           {formatTs(log.sent_at ?? log.created_at)}
         </span>
         <button
-          onClick={del}
+          onClick={(e) => { e.stopPropagation(); del(); }}
           disabled={deleting}
           title="Ta bort"
           style={{

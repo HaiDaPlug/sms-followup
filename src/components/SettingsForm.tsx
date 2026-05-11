@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import type { ReminderSettings, SmsStep } from "@/types/clinic";
 import { resolveSteps } from "@/lib/reminders/steps";
 
@@ -468,6 +469,7 @@ function StepCard({
 // ── Main form ─────────────────────────────────────────────────────────────────
 
 export function SettingsForm({ settings }: { settings: ReminderSettings }) {
+  const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [messageType, setMessageType] = useState<"ok" | "error">("ok");
   const [busy, setBusy] = useState(false);
@@ -517,7 +519,10 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
     setBusy(false);
     setMessageType(response.ok ? "ok" : "error");
     setMessage(response.ok ? "Inställningar sparade." : "Kunde inte spara.");
-    if (response.ok) setSteps(sortedSteps);
+    if (response.ok) {
+      setSteps(sortedSteps);
+      router.refresh();
+    }
   }
 
   async function testSms() {
