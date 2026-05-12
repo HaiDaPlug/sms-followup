@@ -1,6 +1,6 @@
 # Current State — Clinic Rebooking Reminder System
 
-**Last updated:** 2026-05-08 (session 6 — pilot hardening, emoji SMS editor, incoming SMS inbox)
+**Last updated:** 2026-05-11 (session 7 — bulk select send, dashboard SMS count, test override setting)
 **Phase:** Pilot-ready. Import is robust and idempotent. Daily cron refreshes stale flags. Incoming SMS from the virtual number (+46766864658) lands in an inbox with inline reply.
 
 ---
@@ -61,7 +61,7 @@ One deployment per clinic. Supabase Auth gate in place. Multi-tenancy planned fo
 | Route | Status | Notes |
 |-------|--------|-------|
 | `/app/dashboard` | Working | KPI strip with clickable modals, daily prognos, alerts, varningar, senaste aktivitet |
-| `/app/patients` | Working | Redesigned table with card-style rows, left-bar status accents, instant client-side search, sticky column header with inline pagination, fill-sweep SMS + DNC buttons, status dot indicators |
+| `/app/patients` | Working | Redesigned table with card-style rows, left-bar status accents, instant client-side search, sticky column header, bulk select + send (Gmail-style checkboxes), fill-sweep SMS + DNC buttons, status dot indicators |
 | `/app/sms-history` | Working | All contacted patients, full SMS log per patient, send + remove/reactivate actions |
 | `/app/import` | Working | Upload BokaDirekt CSV, Swedish summary labels |
 | `/app/review` | Working | Review queue with resolve/ignore actions |
@@ -224,6 +224,23 @@ src/lib/reminders/process.ts
 - [ ] Set `BOKADIREKT_WEBHOOK_SECRET` — see priority 2 above
 - [ ] Add auth to `/api/settings` and `/api/reminders/send`
 
+### Recently completed (2026-05-11 — session 7)
+
+#### Bulk select & send (Gmail-style)
+- Patients page refactored into `PatientsClient.tsx` (client component) — server page keeps data fetching
+- Checkbox column added as first column in every patient row + select-all in header
+- Dark green sticky bulk action bar appears when ≥1 patient selected: shows count, "Skicka SMS till valda" button, and "Avmarkera" — fires sends sequentially with live `Skickar X/Y…` progress
+- SMS history page (`SmsHistoryClient`) also gets checkboxes on each patient card + same bulk send bar
+
+#### Dashboard "Redo" popup SMS count
+- `GET /api/dashboard/ready-patients` now includes `smsCount` per patient
+- The "Redo för påminnelse" modal in `KpiStrip` shows "N SMS skickate" in teal below each patient's name when they've previously received SMS — no click required
+
+#### Test override setting (`allow_same_number_override`)
+- New boolean setting: **Tillåt test-SMS till samma nummer** — red-tinted card in Körläge section of settings
+- When on: bypasses the sequence-complete guard — patients with status "Sent" can still receive SMS (forces sequence step 1). Only applies to manual sends, not the daily cron.
+- Migration: `supabase/migrations/007_allow_same_number_override.sql` — run in Supabase SQL editor
+
 ### Recently completed (2026-05-08 — session 6)
 
 #### Import robustness
@@ -376,6 +393,9 @@ alter table reminder_settings add column if not exists sms_steps jsonb;
 
 -- 006 (session 6)
 -- Run supabase/migrations/006_incoming_sms.sql
+
+-- 007 (session 7)
+-- Run supabase/migrations/007_allow_same_number_override.sql
 ```
 
 ### Known limitations
