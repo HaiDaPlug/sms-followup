@@ -56,23 +56,29 @@ export async function sendReminderToPatient(
   );
   const latest = latestValidBooking(patient, store.bookings);
 
+  const override = settings.allow_same_number_override ?? false;
+
   if (status !== "Ready") {
-    return addReminderLog({
-      patient_id: patient.id,
-      booking_id: latest?.id ?? null,
-      phone: patient.normalized_phone,
-      message: "",
-      status: "skipped",
-      sequence_number: null,
-      is_cycle_reset: false,
-      provider_message_id: null,
-      skip_reason: toSkipReason(status),
-      error: `Patient ej berättigad: ${status}`,
-      sent_at: null
-    });
+    if (!(override && status === "Sent")) {
+      return addReminderLog({
+        patient_id: patient.id,
+        booking_id: latest?.id ?? null,
+        phone: patient.normalized_phone,
+        message: "",
+        status: "skipped",
+        sequence_number: null,
+        is_cycle_reset: false,
+        provider_message_id: null,
+        skip_reason: toSkipReason(status),
+        error: `Patient ej berättigad: ${status}`,
+        sent_at: null
+      });
+    }
   }
 
-  const next = getNextSequence(patient, settings, store.reminder_logs)!;
+  const next = override && status === "Sent"
+    ? { sequenceNumber: 1, daysThreshold: 0 }
+    : getNextSequence(patient, settings, store.reminder_logs)!;
   const template = templateForSequence(settings, next.sequenceNumber);
   const message = renderSmsTemplate(template, patient, settings);
 

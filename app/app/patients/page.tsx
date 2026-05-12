@@ -1,11 +1,10 @@
 import Link from "next/link";
-import { PatientActions } from "@/components/PatientActions";
 import { AddPatientButton } from "@/components/AddPatientButton";
 import { PatientSearch } from "@/components/PatientSearch";
-import { PatientSmsPopup } from "@/components/PatientSmsPopup";
+import { PatientsClient } from "@/components/PatientsClient";
 import { readStore } from "@/lib/data/repository";
 import { calculatePatientReminderStatus } from "@/lib/reminders/eligibility";
-import { daysSince, formatDate, patientDisplayName } from "@/lib/patients/status";
+import { daysSince, patientDisplayName } from "@/lib/patients/status";
 
 export const dynamic = "force-dynamic";
 
@@ -19,39 +18,7 @@ const filterLabels: Record<string, string> = {
   "Needs review": "Behöver granskas"
 };
 
-const statusLabels: Record<string, string> = {
-  Ready: "Redo",
-  Sent: "Skickat",
-  "Future booking": "Har bokat en tid",
-  "Missing phone": "Saknar telefon",
-  "Do not contact": "Kontakta ej",
-  "Needs review": "Behöver granskas",
-  Waiting: "Väntar",
-  "No valid booking": "Ingen giltig bokning"
-};
-
 const filters = ["all", "Ready", "Sent", "Future booking", "Missing phone", "Do not contact", "Needs review"];
-
-// Status → left-bar accent color
-const statusAccent: Record<string, string> = {
-  Ready:            "#5bbfb5",
-  Sent:             "#3da89d",
-  "Future booking": "#1a4f78",
-  "Missing phone":  "#a33030",
-  "Needs review":   "#a33030",
-  "Do not contact": "#7a5200",
-  Waiting:          "#c8d4d0",
-  "No valid booking": "#c8d4d0",
-};
-
-function badgeClass(status: string) {
-  if (status === "Ready" || status === "Sent") return "ready";
-  if (status === "Future booking") return "future";
-  if (status === "Missing phone") return "missing";
-  if (status === "Needs review") return "review";
-  if (status === "Do not contact") return "ignored";
-  return "waiting";
-}
 
 const PAGE_SIZE = 50;
 
@@ -76,6 +43,14 @@ export default async function PatientsPage({
 
   const search = q.trim().toLowerCase();
 
+  // Build per-patient log map (exclude cycle_reset noise)
+  const logsByPatient = new Map<string, typeof store.reminder_logs>();
+  for (const log of store.reminder_logs) {
+    if (!log.patient_id || log.is_cycle_reset) continue;
+    if (!logsByPatient.has(log.patient_id)) logsByPatient.set(log.patient_id, []);
+    logsByPatient.get(log.patient_id)!.push(log);
+  }
+
   let patients = store.patients
     .map((patient) => ({
       patient,
@@ -85,7 +60,8 @@ export default async function PatientsPage({
         store.bookings,
         store.reminder_logs,
         store.review_items
-      )
+      ),
+      logs: logsByPatient.get(patient.id) ?? [],
     }))
     .filter((row) => active === "all" || row.status === active)
     .filter((row) => {
@@ -109,137 +85,9 @@ export default async function PatientsPage({
 
   const currentParams = { status: active, sort, q, page };
 
-  // Build per-patient log map for popup (exclude cycle_reset noise)
-  const logsByPatient = new Map<string, typeof store.reminder_logs>();
-  for (const log of store.reminder_logs) {
-    if (!log.patient_id || log.is_cycle_reset) continue;
-    if (!logsByPatient.has(log.patient_id)) logsByPatient.set(log.patient_id, []);
-    logsByPatient.get(log.patient_id)!.push(log);
-  }
-
   return (
     <>
       <style>{`
-        .pt-row {
-          display: grid;
-          grid-template-columns: 4px 1fr;
-          background: var(--surface);
-          border-bottom: 1px solid var(--border);
-          transition: background 120ms;
-        }
-        .pt-row:last-child { border-bottom: 0; }
-        .pt-row:nth-child(even) .pt-row-inner { background: var(--surface-sub); }
-        .pt-row:hover .pt-row-inner { background: #edf7f6; }
-
-        .pt-row-inner {
-          display: grid;
-          grid-template-columns: 200px 160px 160px 110px 70px 1fr 175px auto;
-          align-items: center;
-          gap: 0;
-          padding: 0;
-          transition: background 120ms;
-        }
-
-        .pt-cell {
-          padding: 16px 18px;
-          font-size: 14px;
-          color: var(--text);
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .pt-cell-name {
-          padding: 16px 20px;
-        }
-
-        .pt-name {
-          font-weight: 700;
-          font-size: 14.5px;
-          color: var(--text);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .pt-email {
-          font-size: 12.5px;
-          color: var(--text-faint);
-          margin-top: 3px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .pt-phone-main {
-          font-size: 14px;
-          color: var(--text);
-          white-space: nowrap;
-        }
-        .pt-phone-norm {
-          font-size: 12px;
-          color: var(--text-faint);
-          margin-top: 2px;
-          font-variant-numeric: tabular-nums;
-        }
-
-        .pt-days {
-          font-variant-numeric: tabular-nums;
-          font-weight: 700;
-          font-size: 17px;
-          color: var(--text-mid);
-        }
-        .pt-days-label {
-          font-size: 10.5px;
-          color: var(--text-faint);
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          margin-top: 1px;
-        }
-
-        .pt-treatment {
-          font-size: 13px;
-          color: var(--text-muted);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .pt-date {
-          font-size: 13.5px;
-          color: var(--text-muted);
-          font-variant-numeric: tabular-nums;
-          white-space: nowrap;
-        }
-
-        .pt-head {
-          display: grid;
-          grid-template-columns: 4px 1fr;
-          background: var(--surface-sub);
-          border: 1px solid var(--border);
-          border-bottom: 2px solid var(--border-dark);
-          position: sticky;
-          top: 0;
-          z-index: 10;
-        }
-        .pt-head-bar { background: transparent; }
-        .pt-head-inner {
-          display: grid;
-          grid-template-columns: 200px 160px 160px 110px 70px 1fr 175px auto;
-          align-items: center;
-        }
-        .pt-head-cell {
-          padding: 12px 18px;
-          font-size: 11px;
-          font-weight: 700;
-          letter-spacing: 0.07em;
-          text-transform: uppercase;
-          color: var(--text-muted);
-        }
-        .pt-head-cell:first-child { padding-left: 20px; }
-
-        .pt-actions-cell {
-          padding: 12px 18px 12px 8px;
-        }
-
         .pt-search-input {
           padding: 8px 14px 8px 36px;
           border: 1px solid var(--border);
@@ -268,7 +116,6 @@ export default async function PatientsPage({
           pointer-events: none;
           display: flex;
         }
-
         .pt-sort-seg {
           display: flex;
           background: var(--surface-sub);
@@ -293,7 +140,6 @@ export default async function PatientsPage({
           color: #fff;
           font-weight: 600;
         }
-
         .pt-filter-bar {
           display: flex;
           gap: 6px;
@@ -323,7 +169,6 @@ export default async function PatientsPage({
           color: #fff;
           font-weight: 600;
         }
-
         .pt-control-bar {
           display: flex;
           align-items: center;
@@ -332,7 +177,6 @@ export default async function PatientsPage({
           margin-bottom: 18px;
           flex-wrap: wrap;
         }
-
         .pt-header-row {
           display: flex;
           align-items: baseline;
@@ -363,14 +207,13 @@ export default async function PatientsPage({
       <div className="pt-header-row">
         <div className="pt-header-left">
           <h2 className="page-title" style={{ marginBottom: 0 }}>Patienter</h2>
-          <span id="pt-count-chip" className="pt-count-chip">{totalFiltered} / {store.patients.length}</span>
+          <span className="pt-count-chip">{totalFiltered} / {store.patients.length}</span>
         </div>
         <AddPatientButton />
       </div>
 
       {/* Control bar */}
       <div className="pt-control-bar">
-        {/* Status filters */}
         <div className="pt-filter-bar">
           {filters.map((filter) => (
             <Link
@@ -383,7 +226,6 @@ export default async function PatientsPage({
           ))}
         </div>
 
-        {/* Right: search + sort */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           <PatientSearch defaultValue={q} currentParams={{ status: active, sort }} />
 
@@ -404,123 +246,22 @@ export default async function PatientsPage({
         </div>
       </div>
 
-      {/* Sticky column header — outside table-wrap so it sticks to page scroll */}
-      <div className="pt-head" style={{ borderRadius: "var(--radius) var(--radius) 0 0" }}>
-        <div className="pt-head-bar" />
-        <div className="pt-head-inner">
-          <div className="pt-head-cell">Namn</div>
-          <div className="pt-head-cell">Telefon</div>
-          <div className="pt-head-cell">E-post</div>
-          <div className="pt-head-cell">Senaste bokning</div>
-          <div className="pt-head-cell">Dagar</div>
-          <div className="pt-head-cell">Behandling</div>
-          <div className="pt-head-cell" style={{ borderLeft: "1px solid var(--border)" }}>Status</div>
-          <div className="pt-head-cell" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <span>Åtgärder</span>
-            {totalPages > 1 && (
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                {currentPage > 1 && (
-                  <Link href={buildHref(currentParams, { page: String(currentPage - 1) })} style={{ padding: "2px 7px", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, fontSize: 12, color: "var(--text-muted)", background: "var(--surface)", lineHeight: 1.6 }}>←</Link>
-                )}
-                <span style={{ fontSize: 11.5, color: "var(--text-faint)", padding: "0 2px", whiteSpace: "nowrap" }}>
-                  {currentPage}/{totalPages}
-                </span>
-                {currentPage < totalPages && (
-                  <Link href={buildHref(currentParams, { page: String(currentPage + 1) })} style={{ padding: "2px 7px", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, fontSize: 12, color: "var(--text-muted)", background: "var(--surface)", lineHeight: 1.6 }}>→</Link>
-                )}
-              </div>
-            )}
-          </div>
+      {/* Pagination info in header area when needed */}
+      {totalPages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6, marginBottom: 8 }}>
+          {currentPage > 1 && (
+            <Link href={buildHref(currentParams, { page: String(currentPage - 1) })} style={{ padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 5, fontSize: 13, color: "var(--text-muted)", background: "var(--surface)" }}>←</Link>
+          )}
+          <span style={{ fontSize: 12, color: "var(--text-faint)", padding: "0 4px" }}>
+            Sida {currentPage} / {totalPages}
+          </span>
+          {currentPage < totalPages && (
+            <Link href={buildHref(currentParams, { page: String(currentPage + 1) })} style={{ padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 5, fontSize: 13, color: "var(--text-muted)", background: "var(--surface)" }}>→</Link>
+          )}
         </div>
-      </div>
+      )}
 
-      <div className="table-wrap" style={{ borderRadius: "0 0 var(--radius) var(--radius)", overflow: "hidden" }}>
-        {/* Rows */}
-        <div id="pt-empty" className="empty-state" style={{ display: paginated.length === 0 ? "" : "none" }}>
-          Inga patienter matchar det valda filtret.
-        </div>
-        {paginated.map(({ patient, status }) => {
-            const accent = statusAccent[status] ?? "#c8d4d0";
-            const days = daysSince(patient.last_booking_at);
-            const searchKey = [
-              patientDisplayName(patient),
-              patient.phone ?? "",
-              patient.email ?? "",
-            ].join(" ").toLowerCase();
-            const patientLogs = logsByPatient.get(patient.id) ?? [];
-            return (
-              <div key={patient.id} className="pt-row" data-search={searchKey}>
-                <div style={{ background: accent, flexShrink: 0 }} />
-                <div className="pt-row-inner">
-                  {/* Name + email stacked */}
-                  <div className="pt-cell pt-cell-name">
-                    <PatientSmsPopup
-                      patientName={patientDisplayName(patient)}
-                      logs={patientLogs}
-                    />
-                    {patient.email && (
-                      <div className="pt-email">{patient.email}</div>
-                    )}
-                  </div>
-
-                  {/* Phone */}
-                  <div className="pt-cell">
-                    {patient.phone ? (
-                      <>
-                        <div className="pt-phone-main">{patient.phone}</div>
-                        {patient.normalized_phone && (
-                          <div className="pt-phone-norm">{patient.normalized_phone}</div>
-                        )}
-                      </>
-                    ) : (
-                      <span style={{ color: "var(--text-faint)", fontSize: 13 }}>—</span>
-                    )}
-                  </div>
-
-                  {/* Email (hidden — already in name cell) */}
-                  <div className="pt-cell" style={{ color: "var(--text-muted)", fontSize: 12.5 }}>
-                    {patient.email ?? <span style={{ color: "var(--text-faint)" }}>—</span>}
-                  </div>
-
-                  {/* Last booking date */}
-                  <div className="pt-cell">
-                    <span className="pt-date">{formatDate(patient.last_booking_at)}</span>
-                  </div>
-
-                  {/* Days since */}
-                  <div className="pt-cell">
-                    {days != null ? (
-                      <>
-                        <div className="pt-days">{days}</div>
-                        <div className="pt-days-label">dagar</div>
-                      </>
-                    ) : (
-                      <span style={{ color: "var(--text-faint)", fontSize: 13 }}>—</span>
-                    )}
-                  </div>
-
-                  {/* Treatment */}
-                  <div className="pt-cell">
-                    <span className="pt-treatment">{patient.latest_treatment ?? <span style={{ color: "var(--text-faint)" }}>—</span>}</span>
-                  </div>
-
-                  {/* Status badge */}
-                  <div className="pt-cell" style={{ borderLeft: "1px solid var(--border)" }}>
-                    <span className={`badge ${badgeClass(status)}`}>
-                      {statusLabels[status] ?? status}
-                    </span>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="pt-cell pt-actions-cell">
-                    <PatientActions patientId={patient.id} doNotContact={patient.do_not_contact} />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-      </div>
-
+      <PatientsClient rows={paginated} />
     </>
   );
 }

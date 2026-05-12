@@ -12,6 +12,14 @@ export async function GET(request: Request) {
   const store = await readStore();
   const settings = store.reminder_settings[0];
 
+  const smsCountByPatient = new Map<string, number>();
+  for (const log of store.reminder_logs) {
+    if (!log.patient_id || log.is_cycle_reset) continue;
+    if (log.status === "sent" || log.status === "delivered") {
+      smsCountByPatient.set(log.patient_id, (smsCountByPatient.get(log.patient_id) ?? 0) + 1);
+    }
+  }
+
   const all = store.patients
     .filter(
       (p) =>
@@ -29,6 +37,7 @@ export async function GET(request: Request) {
       phone: p.normalized_phone ?? p.phone,
       last_booking_at: p.last_booking_at,
       latest_treatment: p.latest_treatment,
+      smsCount: smsCountByPatient.get(p.id) ?? 0,
     }))
     .sort((a, b) => {
       const tA = a.last_booking_at ? new Date(a.last_booking_at).getTime() : 0;

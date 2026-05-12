@@ -474,6 +474,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
   const [messageType, setMessageType] = useState<"ok" | "error">("ok");
   const [busy, setBusy] = useState(false);
   const [dryRun, setDryRun] = useState(settings.dry_run_mode);
+  const [sameNumberOverride, setSameNumberOverride] = useState(settings.allow_same_number_override ?? false);
   const [steps, setSteps] = useState<SmsStep[]>(() => resolveSteps(settings));
 
   function updateStep(i: number, s: SmsStep) {
@@ -508,6 +509,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
         clinic_name: data.get("clinic_name"),
         is_active: data.get("is_active") === "on",
         dry_run_mode: data.get("dry_run_mode") === "on",
+        allow_same_number_override: data.get("allow_same_number_override") === "on",
         sms_steps: sortedSteps,
         // Keep legacy fields in sync with step 1/2/3 for backwards compat
         sms_template: sortedSteps[0]?.template ?? settings.sms_template,
@@ -654,6 +656,36 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
             </div>
             <div style={{ fontSize: 12, color: dryRun ? "var(--amber)" : "var(--text-muted)", opacity: 0.85, marginTop: 2 }}>
               {dryRun ? "SMS loggas men skickas inte. Avaktivera när du är redo att skicka på riktigt." : "SMS skickas på riktigt. Aktivera testläget igen om du vill simulera."}
+            </div>
+          </div>
+        </label>
+
+        <label style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 12,
+          padding: "14px 16px",
+          borderRadius: "var(--radius-sm)",
+          border: sameNumberOverride ? "1px solid var(--red-border)" : "1px solid var(--border)",
+          cursor: "pointer",
+          background: sameNumberOverride ? "var(--red-bg)" : "var(--surface-sub)",
+          transition: "background 200ms, border-color 200ms",
+        }}>
+          <input
+            checked={sameNumberOverride}
+            name="allow_same_number_override"
+            type="checkbox"
+            onChange={(e) => setSameNumberOverride(e.target.checked)}
+            style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }}
+          />
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 13.5, color: sameNumberOverride ? "var(--red)" : "var(--text)" }}>
+              Tillåt test-SMS till samma nummer
+            </div>
+            <div style={{ fontSize: 12, color: sameNumberOverride ? "var(--red)" : "var(--text-muted)", opacity: 0.85, marginTop: 2 }}>
+              {sameNumberOverride
+                ? "Dubbel-skyddet är avstängt — SMS skickas även om sekvensen redan slutförts. Bara för testning av eget nummer."
+                : "Dubbel-skyddet är aktivt. Aktivera för att skicka SMS till ett nummer som redan fått hela sekvensen."}
             </div>
           </div>
         </label>

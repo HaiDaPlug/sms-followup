@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 
 const statusSv: Record<string, string> = {
   sent:      "Skickat",
@@ -194,10 +194,14 @@ function LogChip({ log, onDeleted }: { log: LogRow; onDeleted: () => void }) {
 // ── Patient card ──────────────────────────────────────────────────────────────
 function PatientCard({
   row,
+  selected,
+  onToggle,
   onLogDeleted,
   onPatientCleared,
 }: {
   row: PatientRow;
+  selected: boolean;
+  onToggle: () => void;
   onLogDeleted: (patientId: string, logId: string) => void;
   onPatientCleared: (patientId: string) => void;
 }) {
@@ -215,21 +219,31 @@ function PatientCard({
 
   return (
     <div style={{
-      background: "var(--surface)",
-      border: "1px solid var(--border)",
+      background: selected ? "rgba(91,191,181,0.06)" : "var(--surface)",
+      border: selected ? "1px solid rgba(91,191,181,0.4)" : "1px solid var(--border)",
       borderRadius: "var(--radius)",
       borderLeft: `3px solid ${accent}`,
       boxShadow: "0 1px 4px rgba(7,59,44,0.06)",
       padding: "16px 20px",
       display: "grid",
-      gridTemplateColumns: "200px 140px 1fr auto",
-      gap: "0 20px",
+      gridTemplateColumns: "28px 200px 140px 1fr auto",
+      gap: "0 16px",
       alignItems: "start",
-      transition: "box-shadow 150ms",
+      transition: "box-shadow 150ms, background 120ms, border-color 120ms",
     }}
     onMouseEnter={e => (e.currentTarget.style.boxShadow = "0 3px 12px rgba(7,59,44,0.1)")}
     onMouseLeave={e => (e.currentTarget.style.boxShadow = "0 1px 4px rgba(7,59,44,0.06)")}
     >
+      {/* Checkbox col */}
+      <div style={{ paddingTop: 2 }}>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggle}
+          style={{ width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer" }}
+        />
+      </div>
+
       {/* Name col */}
       <div>
         <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", lineHeight: 1.3 }}>
@@ -321,11 +335,17 @@ function PatientCard({
   );
 }
 
+type BulkState = "idle" | "sending" | "done";
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] }) {
   const [rows, setRows] = useState(initialRows);
   const [tab, setTab] = useState<Tab>("all");
   const [clearingAll, setClearingAll] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkState, setBulkState] = useState<BulkState>("idle");
+  const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0 });
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
   function recount(logs: LogRow[]) {
     return {
@@ -333,6 +353,46 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
       failedCount:  logs.filter(l => l.status === "failed").length,
       lastActivity: logs[0]?.created_at ?? "",
     };
+  }
+
+  const clearSelection = useCallback(() => {
+    setSelected(new Set());
+    setBulkState("idle");
+    setBulkMsg(null);
+  }, []);
+
+  function toggleOne(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function sendToSelected() {
+    if (bulkState !== "idle") return;
+    const ids = [...selected];
+    setBulkState("sending");
+    setBulkProgress({ done: 0, total: ids.length });
+    let sent = 0, failed = 0;
+    for (const id of ids) {
+      try {
+        const res = await fetch("/api/reminders/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ patientId: id }),
+        });
+        const data = await res.json();
+        const ok = data.status === "sent" || data.status === "dry_run";
+        if (ok) sent++; else failed++;
+      } catch { failed++; }
+      setBulkProgress(p => ({ ...p, done: p.done + 1 }));
+    }
+    setBulkState("done");
+    setBulkMsg(failed === 0 ? `${sent} SMS skickade` : `${sent} skickade, ${failed} misslyckades`);
+    setSelected(new Set());
+    setTimeout(() => { setBulkState("idle"); setBulkMsg(null); }, 4000);
   }
 
   function handleLogDeleted(patientId: string, logId: string) {
@@ -373,8 +433,62 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
     return true;
   });
 
+  const someSelected = selected.size > 0;
+
   return (
     <>
+      {/* Bulk action bar */}
+      {someSelected && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "10px 16px",
+          background: "#073B2C",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          marginBottom: 12,
+          animation: "slideDown 0.18s ease",
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.9)", flex: 1, whiteSpace: "nowrap" }}>
+            {selected.size} {selected.size === 1 ? "vald" : "valda"}
+          </span>
+          {bulkState === "sending" && (
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", fontVariantNumeric: "tabular-nums" }}>
+              Skickar {bulkProgress.done}/{bulkProgress.total}…
+            </span>
+          )}
+          {bulkState === "done" && bulkMsg && (
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.7)" }}>{bulkMsg}</span>
+          )}
+          <button
+            onClick={sendToSelected}
+            disabled={bulkState !== "idle"}
+            style={{
+              background: "#5bbfb5", color: "#fff", border: "none",
+              borderRadius: 5, padding: "6px 14px", fontSize: 13,
+              fontWeight: 600, cursor: bulkState !== "idle" ? "default" : "pointer",
+              whiteSpace: "nowrap", opacity: bulkState !== "idle" ? 0.5 : 1,
+            }}
+          >
+            {bulkState === "sending"
+              ? `Skickar ${bulkProgress.done}/${bulkProgress.total}…`
+              : "Skicka SMS till valda"}
+          </button>
+          <button
+            onClick={clearSelection}
+            style={{
+              background: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.8)",
+              border: "1px solid rgba(255,255,255,0.2)", borderRadius: 5,
+              padding: "6px 12px", fontSize: 12, fontWeight: 500,
+              cursor: "pointer", whiteSpace: "nowrap",
+            }}
+          >
+            Avmarkera
+          </button>
+        </div>
+      )}
+
       {/* Controls bar */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
 
@@ -445,6 +559,8 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
           <PatientCard
             key={row.patientId}
             row={row}
+            selected={selected.has(row.patientId)}
+            onToggle={() => toggleOne(row.patientId)}
             onLogDeleted={handleLogDeleted}
             onPatientCleared={handlePatientCleared}
           />

@@ -39,7 +39,8 @@ function defaultSettings(): Omit<ReminderSettings, "id" | "created_at" | "update
     booking_link: "",
     clinic_name: "Kliniken",
     is_active: true,
-    dry_run_mode: true
+    dry_run_mode: true,
+    allow_same_number_override: false
   };
 }
 
@@ -124,6 +125,7 @@ export async function updateSettings(input: Partial<ReminderSettings>): Promise<
     max_per_day: Number(input.max_per_day ?? current.max_per_day),
     is_active: input.is_active ?? current.is_active,
     dry_run_mode: input.dry_run_mode ?? current.dry_run_mode,
+    allow_same_number_override: input.allow_same_number_override ?? current.allow_same_number_override ?? false,
     updated_at: nowIso()
   };
   const { data, error } = await supabase

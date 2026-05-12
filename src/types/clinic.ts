@@ -66,6 +66,7 @@ export type ReminderSettings = {
   clinic_name: string;
   is_active: boolean;
   dry_run_mode: boolean;
+  allow_same_number_override: boolean;
   created_at: string;
   updated_at: string;
 };

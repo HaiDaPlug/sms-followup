@@ -9,6 +9,7 @@ type ReadyPatient = {
   phone: string | null;
   last_booking_at: string | null;
   latest_treatment: string | null;
+  smsCount?: number;
 };
 
 type SmsLog = {
@@ -326,6 +327,11 @@ function Modal({ type, onClose, onSmsSent }: {
                     {p.latest_treatment ? <span style={{ color: "var(--text-faint)", margin: "0 5px" }}>·</span> : null}
                     {p.latest_treatment}
                   </p>
+                  {(p.smsCount ?? 0) > 0 && (
+                    <p style={{ fontSize: 11, fontWeight: 600, color: "#2a7a68", marginTop: 3, letterSpacing: "0.01em" }}>
+                      {p.smsCount} SMS skickat{(p.smsCount ?? 0) !== 1 ? "e" : ""}
+                    </p>
+                  )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }}>
                   <span style={{ fontSize: 12, color: "var(--text-faint)", fontVariantNumeric: "tabular-nums" }}>
