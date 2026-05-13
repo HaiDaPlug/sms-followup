@@ -476,6 +476,10 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
   const [dryRun, setDryRun] = useState(settings.dry_run_mode);
   const [sameNumberOverride, setSameNumberOverride] = useState(settings.allow_same_number_override ?? false);
   const [steps, setSteps] = useState<SmsStep[]>(() => resolveSteps(settings));
+  const [clinicName, setClinicName] = useState(settings.clinic_name);
+  const [bookingLink, setBookingLink] = useState(settings.booking_link);
+  const [sendTime, setSendTime] = useState(settings.send_time);
+  const [maxPerDay, setMaxPerDay] = useState(settings.max_per_day);
 
   function updateStep(i: number, s: SmsStep) {
     setSteps((prev) => prev.map((x, idx) => (idx === i ? s : x)));
@@ -494,7 +498,8 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
     event.preventDefault();
     setBusy(true);
     setMessage(null);
-    const data = new FormData(event.currentTarget);
+
+    const isActive = (event.currentTarget.elements.namedItem("is_active") as HTMLInputElement)?.checked ?? false;
 
     // Sort steps by day before saving
     const sortedSteps = [...steps].sort((a, b) => a.day - b.day);
@@ -503,13 +508,13 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        send_time: data.get("send_time"),
-        max_per_day: Number(data.get("max_per_day")),
-        booking_link: data.get("booking_link"),
-        clinic_name: data.get("clinic_name"),
-        is_active: data.get("is_active") === "on",
-        dry_run_mode: data.get("dry_run_mode") === "on",
-        allow_same_number_override: data.get("allow_same_number_override") === "on",
+        send_time: sendTime,
+        max_per_day: Number(maxPerDay),
+        booking_link: bookingLink,
+        clinic_name: clinicName,
+        is_active: isActive,
+        dry_run_mode: dryRun,
+        allow_same_number_override: sameNumberOverride,
         sms_steps: sortedSteps,
         // Keep legacy fields in sync with step 1/2/3 for backwards compat
         sms_template: sortedSteps[0]?.template ?? settings.sms_template,
@@ -519,11 +524,28 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
       }),
     });
     setBusy(false);
-    setMessageType(response.ok ? "ok" : "error");
-    setMessage(response.ok ? "Inställningar sparade." : "Kunde inte spara.");
     if (response.ok) {
-      setSteps(sortedSteps);
+      const saved = await response.json() as ReminderSettings;
+      // Sync all state from the confirmed-saved server response
+      const savedSteps = resolveSteps(saved);
+      setSteps(savedSteps);
+      setClinicName(saved.clinic_name);
+      setBookingLink(saved.booking_link);
+      setSendTime(saved.send_time);
+      setMaxPerDay(saved.max_per_day);
+      setDryRun(saved.dry_run_mode);
+      setSameNumberOverride(saved.allow_same_number_override ?? false);
+      setMessageType("ok");
+      // Warn if sms_steps didn't persist (column likely missing in DB)
+      if (sortedSteps.length > 0 && !saved.sms_steps) {
+        setMessage("Sparade (OBS: sms_steps saknas i databasen — kör migration 003).");
+      } else {
+        setMessage("Inställningar sparade.");
+      }
       router.refresh();
+    } else {
+      setMessageType("error");
+      setMessage("Kunde inte spara.");
     }
   }
 
@@ -550,23 +572,23 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
         <div className="grid cols-2">
           <div className="field">
             <label htmlFor="clinic_name">Klinikens namn</label>
-            <input defaultValue={settings.clinic_name} id="clinic_name" name="clinic_name" placeholder="Kliniken" />
+            <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} id="clinic_name" name="clinic_name" placeholder="Kliniken" />
           </div>
           <div className="field">
             <label htmlFor="booking_link">Bokningslänk</label>
-            <input defaultValue={settings.booking_link} id="booking_link" name="booking_link" type="url" placeholder="https://..." />
+            <input value={bookingLink} onChange={(e) => setBookingLink(e.target.value)} id="booking_link" name="booking_link" type="url" placeholder="https://..." />
           </div>
         </div>
 
         <div className="grid cols-2">
           <div className="field">
             <label htmlFor="send_time">Sändningstid</label>
-            <input defaultValue={settings.send_time} id="send_time" name="send_time" type="time" />
+            <input value={sendTime} onChange={(e) => setSendTime(e.target.value)} id="send_time" name="send_time" type="time" />
             <span className="field-hint">Klockslag för det dagliga batch-körningen.</span>
           </div>
           <div className="field" style={{ maxWidth: 220 }}>
             <label htmlFor="max_per_day">Max SMS per dag</label>
-            <input defaultValue={settings.max_per_day} id="max_per_day" min="1" name="max_per_day" type="number" />
+            <input value={maxPerDay} onChange={(e) => setMaxPerDay(Number(e.target.value))} id="max_per_day" min="1" name="max_per_day" type="number" />
             <span className="field-hint">Tak per körning — skyddar mot oavsiktliga mass-skick.</span>
           </div>
         </div>
@@ -628,7 +650,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
           <input defaultChecked={settings.is_active} name="is_active" type="checkbox" style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }} />
           <div>
             <div style={{ fontWeight: 600, fontSize: 13.5, color: "var(--text)" }}>Aktivera automatiska påminnelser</div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Daglig körning sker klockan {settings.send_time} om detta är aktiverat.</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Daglig körning sker klockan {sendTime} om detta är aktiverat.</div>
           </div>
         </label>
 
