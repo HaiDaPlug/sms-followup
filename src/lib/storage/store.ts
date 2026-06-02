@@ -99,6 +99,7 @@ export async function getSettings(): Promise<ReminderSettings> {
   const { data, error } = await supabase
     .from("reminder_settings")
     .select("*")
+    .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
