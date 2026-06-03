@@ -40,11 +40,15 @@ function toSkipReason(status: string): SkipReason {
 /**
  * Sends a reminder to a single patient. Accepts the pre-loaded store so the
  * daily batch doesn't re-fetch from the DB for every patient.
+ *
+ * Pass `sequenceOverride` (1-based) to force a specific template instead of
+ * the automatically calculated next step.
  */
 export async function sendReminderToPatient(
   patient: Patient,
   store: ClinicStore,
-  forceDryRun = false
+  forceDryRun = false,
+  sequenceOverride?: number
 ): Promise<ReminderLog> {
   const settings = store.reminder_settings[0];
   const status = calculatePatientReminderStatus(
@@ -59,7 +63,7 @@ export async function sendReminderToPatient(
   const override = settings.allow_same_number_override ?? false;
 
   if (status !== "Ready") {
-    if (!(override && status === "Sent")) {
+    if (!(override && status === "Sent") && !sequenceOverride) {
       return addReminderLog({
         patient_id: patient.id,
         booking_id: latest?.id ?? null,
@@ -76,9 +80,11 @@ export async function sendReminderToPatient(
     }
   }
 
-  const next = override && status === "Sent"
-    ? { sequenceNumber: 1, daysThreshold: 0 }
-    : getNextSequence(patient, settings, store.reminder_logs)!;
+  const next = sequenceOverride
+    ? { sequenceNumber: sequenceOverride, daysThreshold: 0 }
+    : override && status === "Sent"
+      ? { sequenceNumber: 1, daysThreshold: 0 }
+      : getNextSequence(patient, settings, store.reminder_logs)!;
   const template = templateForSequence(settings, next.sequenceNumber);
   const message = renderSmsTemplate(template, patient, settings);
 

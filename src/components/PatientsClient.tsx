@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { PatientSmsPopup } from "@/components/PatientSmsPopup";
-import { PatientActions } from "@/components/PatientActions";
+import { PatientActions, type TemplateStep } from "@/components/PatientActions";
 import type { Patient, ReminderLog } from "@/types/clinic";
 
 export type PatientRow = {
@@ -60,7 +60,7 @@ function patientDisplayName(p: Patient) {
   return p.full_name;
 }
 
-export function PatientsClient({ rows }: { rows: PatientRow[] }) {
+export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps?: TemplateStep[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkState, setBulkState] = useState<BulkState>("idle");
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -463,7 +463,7 @@ export function PatientsClient({ rows }: { rows: PatientRow[] }) {
 
                 {/* Actions */}
                 <div className="pt-cell pt-actions-cell">
-                  <PatientActions patientId={patient.id} doNotContact={patient.do_not_contact} />
+                  <PatientActions patientId={patient.id} doNotContact={patient.do_not_contact} steps={steps} />
                 </div>
               </div>
             </div>

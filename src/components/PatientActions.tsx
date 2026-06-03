@@ -4,6 +4,8 @@ import { useState } from "react";
 
 type SendState = "idle" | "sending" | "sent" | "failed";
 
+export type TemplateStep = { day: number; template: string };
+
 const styles = `
 @keyframes pa-spin { to { transform: rotate(360deg); } }
 
@@ -176,6 +178,25 @@ const styles = `
   animation: pa-spin 0.7s linear infinite;
   flex-shrink: 0;
 }
+
+.pa-tpl-select {
+  height: 32px;
+  border: 1px solid #1a5a40;
+  border-radius: 5px;
+  background: #073B2C;
+  color: rgba(255,255,255,0.85);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0 8px;
+  cursor: pointer;
+  outline: none;
+  white-space: nowrap;
+  transition: border-color 0.2s, background 0.2s;
+  max-width: 120px;
+}
+.pa-tpl-select:hover { background: #0a4f38; border-color: #5bbfb5; }
+.pa-tpl-select:focus { border-color: #5bbfb5; }
+.pa-tpl-select option { background: #073B2C; color: #fff; }
 `;
 
 let injected = false;
@@ -190,14 +211,17 @@ function injectStyles() {
 export function PatientActions({
   patientId,
   doNotContact = false,
+  steps = [],
 }: {
   patientId: string;
   doNotContact?: boolean;
+  steps?: TemplateStep[];
 }) {
   const [sendState, setSendState] = useState<SendState>("idle");
   const [dncBusy, setDncBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [isDnc, setIsDnc] = useState(doNotContact);
+  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
 
   if (typeof document !== "undefined") injectStyles();
 
@@ -205,10 +229,12 @@ export function PatientActions({
     if (sendState !== "idle") return;
     setSendState("sending");
     try {
+      const body: { patientId: string; sequenceOverride?: number } = { patientId };
+      if (selectedSeq !== null) body.sequenceOverride = selectedSeq;
       const res = await fetch("/api/reminders/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       const ok = data.status === "sent" || data.status === "dry_run";
@@ -254,6 +280,22 @@ export function PatientActions({
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      {steps.length > 0 && (
+        <select
+          className="pa-tpl-select"
+          disabled={sendState !== "idle"}
+          value={selectedSeq ?? ""}
+          onChange={(e) => setSelectedSeq(e.target.value === "" ? null : Number(e.target.value))}
+          title="Välj mall"
+        >
+          <option value="">Automatisk</option>
+          {steps.map((s, i) => (
+            <option key={i + 1} value={i + 1}>
+              Mall {i + 1} (dag {s.day})
+            </option>
+          ))}
+        </select>
+      )}
       <button
         className={smsClass}
         disabled={sendState !== "idle"}

@@ -4,6 +4,7 @@ import { PatientSearch } from "@/components/PatientSearch";
 import { PatientsClient } from "@/components/PatientsClient";
 import { readStore } from "@/lib/data/repository";
 import { calculatePatientReminderStatus } from "@/lib/reminders/eligibility";
+import { resolveSteps } from "@/lib/reminders/steps";
 import { daysSince, patientDisplayName } from "@/lib/patients/status";
 
 export const dynamic = "force-dynamic";
@@ -261,7 +262,7 @@ export default async function PatientsPage({
         </div>
       )}
 
-      <PatientsClient rows={paginated} />
+      <PatientsClient rows={paginated} steps={resolveSteps(settings)} />
     </>
   );
 }
