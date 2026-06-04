@@ -1,6 +1,6 @@
 # Current State — Clinic Rebooking Reminder System
 
-**Last updated:** 2026-05-11 (session 7 — bulk select send, dashboard SMS count, test override setting)
+**Last updated:** 2026-06-04 (session 8 — template selector dropdown on SMS send button)
 **Phase:** Pilot-ready. Import is robust and idempotent. Daily cron refreshes stale flags. Incoming SMS from the virtual number (+46766864658) lands in an inbox with inline reply.
 
 ---
@@ -223,6 +223,16 @@ src/lib/reminders/process.ts
 - [ ] Set `CRON_SECRET` — without it anyone can trigger mass SMS sends
 - [ ] Set `BOKADIREKT_WEBHOOK_SECRET` — see priority 2 above
 - [ ] Add auth to `/api/settings` and `/api/reminders/send`
+
+### Recently completed (2026-06-04 — session 8)
+
+#### Template selector dropdown on SMS send button
+- `PatientActions` now accepts a `steps` prop (`TemplateStep[]`) — when steps are present, a compact dropdown appears to the left of the "Skicka SMS" button
+- Dropdown options: **Automatisk** (uses normal eligibility logic to pick the next due step) + **Mall 1 (dag X)**, **Mall 2 (dag Y)**, etc. for each configured step
+- Selecting a specific template passes `sequenceOverride` to the API, bypassing the "patient not eligible" guard so any template can be forced regardless of where the patient is in their sequence
+- `POST /api/reminders/send` now accepts optional `sequenceOverride: number` in the request body
+- `sendReminderToPatient()` in `process.ts` accepts optional `sequenceOverride` — when set, skips eligibility blocking and uses that 1-based sequence index directly
+- Steps are resolved server-side in `patients/page.tsx` via `resolveSteps(settings)` and threaded down through `PatientsClient` → `PatientActions`
 
 ### Recently completed (2026-05-11 — session 7)
 
