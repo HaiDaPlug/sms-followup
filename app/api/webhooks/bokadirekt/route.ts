@@ -4,7 +4,7 @@ import { handleBokaDirektWebhook } from "@/lib/webhooks/bokadirekt";
 function authorized(request: Request) {
   const secret = process.env.BOKADIREKT_WEBHOOK_SECRET;
   if (!secret) return true;
-  return request.headers.get("x-webhook-secret") === secret;
+  return request.headers.get("webhook-secret") === secret;
 }
 
 export async function POST(request: Request) {
@@ -12,12 +12,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const headers: Record<string, string> = {};
-  request.headers.forEach((v, k) => { headers[k] = v; });
-  console.log("[bokadirekt webhook] headers:", JSON.stringify(headers, null, 2));
-
+  const eventType = request.headers.get("webhook-event") ?? "unknown";
   const payload = (await request.json()) as Record<string, unknown>;
-  console.log("[bokadirekt webhook] raw payload:", JSON.stringify(payload, null, 2));
-  const result = await handleBokaDirektWebhook(payload);
+  const result = await handleBokaDirektWebhook(payload, eventType);
   return NextResponse.json(result);
 }
