@@ -12,7 +12,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const headers: Record<string, string> = {};
+  request.headers.forEach((v, k) => { headers[k] = v; });
+  console.log("[bokadirekt webhook] headers:", JSON.stringify(headers, null, 2));
+
   const payload = (await request.json()) as Record<string, unknown>;
+  console.log("[bokadirekt webhook] raw payload:", JSON.stringify(payload, null, 2));
   const result = await handleBokaDirektWebhook(payload);
   return NextResponse.json(result);
 }
