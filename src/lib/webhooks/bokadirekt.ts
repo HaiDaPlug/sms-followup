@@ -1,6 +1,6 @@
 import { readStore, resetPatientCycle } from "@/lib/data/repository";
 import { normalizePhone } from "@/lib/import/normalizers";
-import { createClient } from "@/lib/supabase/server";
+import { createSupabaseServer } from "@/lib/supabase/server";
 
 interface BokaDirektCustomer {
   Id: string;
@@ -55,7 +55,7 @@ export async function handleBokaDirektWebhook(
 }
 
 async function handleBookingUpsert(booking: BokaDirektPayload) {
-  const supabase = await createClient();
+  const supabase = await createSupabaseServer();
   const customer = booking.Customer;
   const rawPhone = customer.MobilePhoneNumber || customer.PhoneNumber;
   const phone = normalizePhone(rawPhone);
@@ -100,7 +100,7 @@ async function handleBookingUpsert(booking: BokaDirektPayload) {
 }
 
 async function upsertBookingAndResetCycle(patientId: string, booking: BokaDirektPayload) {
-  const supabase = await createClient();
+  const supabase = await createSupabaseServer();
 
   const { data: upsertedBooking } = await supabase
     .from("bookings")
@@ -133,7 +133,7 @@ async function upsertBookingAndResetCycle(patientId: string, booking: BokaDirekt
 }
 
 async function handleCancellation(booking: BokaDirektPayload) {
-  const supabase = await createClient();
+  const supabase = await createSupabaseServer();
 
   await supabase
     .from("bookings")
