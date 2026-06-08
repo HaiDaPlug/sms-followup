@@ -3,7 +3,7 @@ import { readStore } from "@/lib/data/repository";
 import { sendReminderToPatient } from "@/lib/reminders/process";
 
 export async function POST(request: Request) {
-  let body: { patientId?: string; sequenceOverride?: number };
+  let body: { patientId?: string; sequenceOverride?: number; forceNext?: boolean };
   try {
     body = await request.json();
   } catch {
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const log = await sendReminderToPatient(patient, store, false, body.sequenceOverride);
+    const log = await sendReminderToPatient(patient, store, false, body.sequenceOverride, body.forceNext ?? true);
     return NextResponse.json({ status: log.status, error: log.error ?? null, log });
   } catch (err) {
     const error = err instanceof Error ? err.message : "Oväntat fel";

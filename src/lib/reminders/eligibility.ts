@@ -48,7 +48,8 @@ function logsInCurrentCycle(patientId: string, logs: ReminderLog[]): ReminderLog
 export function getNextSequence(
   patient: Patient,
   settings: ReminderSettings,
-  logs: ReminderLog[]
+  logs: ReminderLog[],
+  force = false
 ): NextSequenceInfo {
   if (!patient.last_booking_at) return null;
 
@@ -67,7 +68,7 @@ export function getNextSequence(
   if (maxSentSeq >= steps.length) return null; // full sequence complete
 
   const nextStep = steps[maxSentSeq]; // 0-indexed: next to send
-  if (!nextStep || days < nextStep.day) return null; // not yet time
+  if (!nextStep || (!force && days < nextStep.day)) return null;
 
   return { sequenceNumber: maxSentSeq + 1, daysThreshold: nextStep.day };
 }

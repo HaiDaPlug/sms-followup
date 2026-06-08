@@ -48,7 +48,8 @@ export async function sendReminderToPatient(
   patient: Patient,
   store: ClinicStore,
   forceDryRun = false,
-  sequenceOverride?: number
+  sequenceOverride?: number,
+  forceNext = false
 ): Promise<ReminderLog> {
   const settings = store.reminder_settings[0];
   const status = calculatePatientReminderStatus(
@@ -63,7 +64,7 @@ export async function sendReminderToPatient(
   const override = settings.allow_same_number_override ?? false;
 
   if (status !== "Ready") {
-    if (!(override && status === "Sent") && !sequenceOverride) {
+    if (!(override && status === "Sent") && !sequenceOverride && !forceNext) {
       return addReminderLog({
         patient_id: patient.id,
         booking_id: latest?.id ?? null,
@@ -84,7 +85,7 @@ export async function sendReminderToPatient(
     ? { sequenceNumber: sequenceOverride, daysThreshold: 0 }
     : override && status === "Sent"
       ? { sequenceNumber: 1, daysThreshold: 0 }
-      : getNextSequence(patient, settings, store.reminder_logs)!;
+      : getNextSequence(patient, settings, store.reminder_logs, forceNext)!;
   const template = templateForSequence(settings, next.sequenceNumber);
   const message = renderSmsTemplate(template, patient, settings);
 
