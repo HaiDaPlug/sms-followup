@@ -40,6 +40,7 @@ export type Booking = {
   booking_at: string | null;
   treatment: string | null;
   status: BookingStatus;
+  cancelled: boolean;
   source: string;
   raw_data: Record<string, unknown>;
   created_at: string;

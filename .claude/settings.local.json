@@ -8,7 +8,15 @@
       "Bash(git remote *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "Bash(npx tsc *)",
+      "Bash(xargs grep *)",
+      "Bash(node -e \"require\\('framer-motion'\\); console.log\\('ok'\\)\")",
+      "Bash(git push *)",
+      "Bash(del \"c:\\\\Users\\\\Hai Pham Bui\\\\Desktop\\\\sms-followup\\\\scripts\\\\migrate.ts\")",
+      "Bash(npm list *)",
+      "WebFetch(domain:46elks.com)",
+      "Bash(node -e ' *)"
     ]
   }
 }

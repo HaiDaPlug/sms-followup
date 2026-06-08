@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import type { ReminderSettings, SmsStep } from "@/types/clinic";
 import { resolveSteps } from "@/lib/reminders/steps";
 
-const VARIABLES_HINT = "{{firstName}}  {{fullName}}  {{lastBookingDate}}  {{bookingLink}}  {{clinicName}}";
+const VARIABLES_HINT = "{{firstName}} / {{förnamn}}  {{fullName}}  {{lastBookingDate}}  {{bookingLink}}  {{clinicName}}";
 
 // GSM-7 basic charset. Every character listed here is a single GSM-7 unit
 // except those also in GSM7_EXTENDED, which consume 2 units (escape + char).
@@ -36,11 +36,17 @@ function ucs2Length(text: string): number {
 // reflects what will actually be sent, not the raw template string.
 const PLACEHOLDER_EXAMPLES: Record<string, string> = {
   "{{firstName}}":       "Anna",
+  "{{förnamn}}":         "Anna",
   "{{fullName}}":        "Anna Svensson",
+  "{{fullständigtNamn}}": "Anna Svensson",
   "{{lastName}}":        "Svensson",
+  "{{efternamn}}":       "Svensson",
   "{{lastBookingDate}}": "2026-04-01",
+  "{{senasteBesök}}":    "2026-04-01",
   "{{bookingLink}}":     "https://bokadirekt.se/osteopaticentrum",
+  "{{bokningsLänk}}":    "https://bokadirekt.se/osteopaticentrum",
   "{{clinicName}}":      "Osteopati Centrum",
+  "{{klinikNamn}}":      "Osteopati Centrum",
 };
 
 function expandTemplate(template: string): string {

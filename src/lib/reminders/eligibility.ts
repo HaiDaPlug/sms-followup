@@ -24,6 +24,7 @@ export function latestValidBooking(patient: Patient, bookings: Booking[]) {
       (booking) =>
         booking.patient_id === patient.id &&
         booking.booking_at === patient.last_booking_at &&
+        !booking.cancelled &&
         !/cancelled|avbokad/i.test(booking.status)
     )
     .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())[0];
@@ -134,13 +135,20 @@ export function renderSmsTemplate(
     ? new Intl.DateTimeFormat("sv-SE").format(new Date(patient.last_booking_at))
     : "";
 
+  const firstName = patient.first_name ?? patient.full_name.split(" ")[0] ?? "";
   return template
-    .replaceAll("{{firstName}}", patient.first_name ?? patient.full_name.split(" ")[0] ?? "")
+    .replaceAll("{{firstName}}", firstName)
+    .replaceAll("{{förnamn}}", firstName)
     .replaceAll("{{fullName}}", patient.full_name)
+    .replaceAll("{{fullständigtNamn}}", patient.full_name)
     .replaceAll("{{lastName}}", patient.last_name ?? "")
+    .replaceAll("{{efternamn}}", patient.last_name ?? "")
     .replaceAll("{{lastBookingDate}}", lastBookingDate)
+    .replaceAll("{{senasteBesök}}", lastBookingDate)
     .replaceAll("{{bookingLink}}", settings.booking_link)
-    .replaceAll("{{clinicName}}", settings.clinic_name);
+    .replaceAll("{{bokningsLänk}}", settings.booking_link)
+    .replaceAll("{{clinicName}}", settings.clinic_name)
+    .replaceAll("{{klinikNamn}}", settings.clinic_name);
 }
 
 /** Returns any unresolved {{placeholder}} tokens left in the rendered message. */
