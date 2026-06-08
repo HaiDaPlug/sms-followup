@@ -1,5 +1,6 @@
 import { ReviewActions } from "@/components/ReviewActions";
 import { FailedSmsActions } from "@/components/FailedSmsActions";
+import { BookingMatchActions } from "@/components/BookingMatchActions";
 import { readStore } from "@/lib/data/repository";
 import { formatDate } from "@/lib/patients/status";
 
@@ -69,7 +70,20 @@ export default async function ReviewPage() {
                 </td>
                 <td className="muted">{formatDate(item.created_at)}</td>
                 <td>
-                  {item.status === "open" && item.type === "failed_sms" ? (
+                  {item.status === "open" && item.type === "pending_booking_match" ? (
+                    <BookingMatchActions
+                      reviewId={item.id}
+                      matchedPatientId={typeof item.raw_data.match_patient_id === "string" ? item.raw_data.match_patient_id : null}
+                      matchedPatientName={
+                        (() => {
+                          const pid = item.raw_data.match_patient_id;
+                          if (typeof pid !== "string") return null;
+                          return store.patients.find((p) => p.id === pid)?.full_name ?? null;
+                        })()
+                      }
+                      matchTier={String(item.raw_data.match_tier ?? "")}
+                    />
+                  ) : item.status === "open" && item.type === "failed_sms" ? (
                     <FailedSmsActions
                       reviewId={item.id}
                       patientId={String(item.raw_data.patient_id ?? "")}
