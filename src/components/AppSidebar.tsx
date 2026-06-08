@@ -48,6 +48,16 @@ const navItems = [
     )
   },
   {
+    href: "/app/analytics",
+    label: "Analys",
+    icon: (
+      <svg className="nav-icon" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={1.75}>
+        <path d="M2 12l3.5-4 3 2.5L12 5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M2 14h12" strokeLinecap="round" />
+      </svg>
+    )
+  },
+  {
     href: "/app/review",
     label: "Granskning",
     icon: (
