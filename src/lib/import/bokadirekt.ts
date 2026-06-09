@@ -208,6 +208,7 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
       booking_at: row.booking_at,
       treatment: row.treatment,
       status: row.status,
+      cancelled: /cancelled|avbokad/i.test(row.status),
       source: row.source,
       raw_data: row.raw_data,
       created_at: existingBooking?.created_at ?? now,
