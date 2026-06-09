@@ -162,7 +162,7 @@ function SendButton({ patientId, onSent }: { patientId: string; onSent: () => vo
       const res = await fetch("/api/reminders/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId }),
+        body: JSON.stringify({ patientId, forceNext: true }),
       });
       const data = await res.json();
       const success = data.status === "sent" || data.status === "dry_run";

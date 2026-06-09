@@ -20,7 +20,7 @@ export function SmsHistoryActions({
       const res = await fetch("/api/reminders/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId }),
+        body: JSON.stringify({ patientId, forceNext: true }),
       });
       const data = await res.json().catch(() => ({})) as { status?: string; error?: string };
       if (!res.ok) {

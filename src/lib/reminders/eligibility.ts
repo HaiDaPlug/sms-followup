@@ -67,10 +67,18 @@ export function getNextSequence(
 
   if (maxSentSeq >= steps.length) return null; // full sequence complete
 
-  const nextStep = steps[maxSentSeq]; // 0-indexed: next to send
-  if (!nextStep || (!force && days < nextStep.day)) return null;
-
-  return { sequenceNumber: maxSentSeq + 1, daysThreshold: nextStep.day };
+  if (force) {
+    // Manual send: next sequential step in the sequence, date threshold ignored
+    const nextStep = steps[maxSentSeq];
+    if (!nextStep) return null;
+    return { sequenceNumber: maxSentSeq + 1, daysThreshold: nextStep.day };
+  } else {
+    // Cron: jump to the highest threshold that has been crossed (and not yet sent)
+    const eligible = steps.filter((s, i) => i >= maxSentSeq && days >= s.day);
+    const nextStep = eligible[eligible.length - 1];
+    if (!nextStep) return null;
+    return { sequenceNumber: steps.indexOf(nextStep) + 1, daysThreshold: nextStep.day };
+  }
 }
 
 export function calculatePatientReminderStatus(
@@ -84,7 +92,7 @@ export function calculatePatientReminderStatus(
   if (!patient.normalized_phone) return "Missing phone";
   // Check live rather than trusting the stored flag which goes stale between imports
   const hasFutureBooking = bookings.some(
-    (b) => b.patient_id === patient.id && isFutureBooking(b.booking_at)
+    (b) => b.patient_id === patient.id && !b.cancelled && isFutureBooking(b.booking_at)
   );
   if (hasFutureBooking) return "Future booking";
   if (

@@ -20,24 +20,25 @@ export async function GET(request: Request) {
   const [{ data: bookings }, { data: smsLogs }, { data: patients }] = await Promise.all([
     supabase
       .from("bookings")
-      .select("id, booking_at, patient_id, treatment, service_name, practitioner_name, location_name, source, cancelled, bokadirekt_booking_id")
-      .gte("booking_at", since)
-      .order("booking_at", { ascending: false }),
+      .select("id, booking_at, event_created_at, created_at, patient_id, treatment, service_name, practitioner_name, location_name, source, cancelled, bokadirekt_booking_id")
+      .or(`event_created_at.gte.${since},and(event_created_at.is.null,created_at.gte.${since})`)
+      .order("created_at", { ascending: false }),
     supabase
       .from("reminder_logs")
       .select("id, created_at, status, sequence_number, patient_id")
-      .in("status", ["sent", "dry_run", "delivered"])
+      .in("status", ["sent", "delivered"])
       .gte("created_at", since),
     supabase
       .from("patients")
       .select("id, full_name, first_name, last_name, normalized_phone, last_booking_at"),
   ]);
 
-  // Group bookings by week
+  // Group bookings by week of booking creation (EventCreated ?? created_at)
   const bookingsByWeek: Record<string, number> = {};
   for (const b of bookings ?? []) {
-    if (!b.booking_at) continue;
-    const k = weekKey(b.booking_at);
+    const effectiveDate = (b as { event_created_at?: string | null }).event_created_at ?? b.created_at;
+    if (!effectiveDate) continue;
+    const k = weekKey(effectiveDate);
     bookingsByWeek[k] = (bookingsByWeek[k] ?? 0) + 1;
   }
 
@@ -60,7 +61,6 @@ export async function GET(request: Request) {
   // Enrich bookings list with patient name for the table
   const patientMap = new Map((patients ?? []).map((p) => [p.id, p]));
   const bookingRows = (bookings ?? [])
-    .filter((b) => b.booking_at)
     .map((b) => ({
       id: b.id,
       booking_at: b.booking_at,

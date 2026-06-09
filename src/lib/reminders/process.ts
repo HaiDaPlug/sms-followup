@@ -63,8 +63,35 @@ export async function sendReminderToPatient(
 
   const override = settings.allow_same_number_override ?? false;
 
+  const HARD_BLOCK = [
+    "Do not contact",
+    "Missing phone",
+    "Future booking",
+    "Needs review",
+    "No valid booking",
+  ] as const;
+
   if (status !== "Ready") {
-    if (!(override && status === "Sent") && !sequenceOverride && !forceNext) {
+    const isHardBlock = (HARD_BLOCK as readonly string[]).includes(status);
+
+    if (isHardBlock) {
+      return addReminderLog({
+        patient_id: patient.id,
+        booking_id: latest?.id ?? null,
+        phone: patient.normalized_phone,
+        message: "",
+        status: "skipped",
+        sequence_number: null,
+        is_cycle_reset: false,
+        provider_message_id: null,
+        skip_reason: toSkipReason(status),
+        error: `Patient ej berättigad: ${status}`,
+        sent_at: null
+      });
+    }
+
+    // Soft blocks (Waiting, Sent): allow through for forceNext, sequenceOverride, or allow_same_number_override
+    if (!forceNext && !sequenceOverride && !(override && status === "Sent")) {
       return addReminderLog({
         patient_id: patient.id,
         booking_id: latest?.id ?? null,
@@ -85,7 +112,23 @@ export async function sendReminderToPatient(
     ? { sequenceNumber: sequenceOverride, daysThreshold: 0 }
     : override && status === "Sent"
       ? { sequenceNumber: 1, daysThreshold: 0 }
-      : getNextSequence(patient, settings, store.reminder_logs, forceNext)!;
+      : getNextSequence(patient, settings, store.reminder_logs, forceNext);
+
+  if (!next) {
+    return addReminderLog({
+      patient_id: patient.id,
+      booking_id: latest?.id ?? null,
+      phone: patient.normalized_phone,
+      message: "",
+      status: "skipped",
+      sequence_number: null,
+      is_cycle_reset: false,
+      provider_message_id: null,
+      skip_reason: "sequence_complete",
+      error: "Sekvensen är slutförd",
+      sent_at: null
+    });
+  };
   const template = templateForSequence(settings, next.sequenceNumber);
   const message = renderSmsTemplate(template, patient, settings);
 
@@ -218,7 +261,7 @@ export async function processDailyReminders() {
   const stalePatients: Patient[] = [];
   for (const patient of store.patients) {
     const hasFuture = store.bookings.some(
-      (b: Booking) => b.patient_id === patient.id && isFutureBooking(b.booking_at)
+      (b: Booking) => b.patient_id === patient.id && !b.cancelled && isFutureBooking(b.booking_at)
     );
     if (patient.has_future_booking !== hasFuture) {
       stalePatients.push({ ...patient, has_future_booking: hasFuture, updated_at: nowIso() });

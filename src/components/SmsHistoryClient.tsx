@@ -381,7 +381,7 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
         const res = await fetch("/api/reminders/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ patientId: id }),
+          body: JSON.stringify({ patientId: id, forceNext: true }),
         });
         const data = await res.json();
         const ok = data.status === "sent" || data.status === "dry_run";

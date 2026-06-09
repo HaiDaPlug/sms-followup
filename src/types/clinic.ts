@@ -25,6 +25,7 @@ export type Patient = {
   has_future_booking: boolean;
   do_not_contact: boolean;
   source: string;
+  bokadirekt_customer_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -43,6 +44,7 @@ export type Booking = {
   cancelled: boolean;
   source: string;
   raw_data: Record<string, unknown>;
+  event_created_at?: string | null;
   created_at: string;
   updated_at: string;
 };

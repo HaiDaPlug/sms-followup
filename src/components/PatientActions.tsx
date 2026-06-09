@@ -229,7 +229,7 @@ export function PatientActions({
     if (sendState !== "idle") return;
     setSendState("sending");
     try {
-      const body: { patientId: string; sequenceOverride?: number } = { patientId };
+      const body: { patientId: string; sequenceOverride?: number; forceNext: boolean } = { patientId, forceNext: true };
       if (selectedSeq !== null) body.sequenceOverride = selectedSeq;
       const res = await fetch("/api/reminders/send", {
         method: "POST",

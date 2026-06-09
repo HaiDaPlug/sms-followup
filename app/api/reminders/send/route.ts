@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const log = await sendReminderToPatient(patient, store, false, body.sequenceOverride, body.forceNext ?? true);
+    const log = await sendReminderToPatient(patient, store, false, body.sequenceOverride, body.forceNext ?? false);
     return NextResponse.json({ status: log.status, error: log.error ?? null, log });
   } catch (err) {
     const error = err instanceof Error ? err.message : "Oväntat fel";

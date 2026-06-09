@@ -1,7 +1,7 @@
 # Current State — Clinic Rebooking Reminder System
 
-**Last updated:** 2026-06-04 (session 8 — template selector dropdown on SMS send button)
-**Phase:** Pilot-ready. Import is robust and idempotent. Daily cron refreshes stale flags. Incoming SMS from the virtual number (+46766864658) lands in an inbox with inline reply.
+**Last updated:** 2026-06-08 (session 9 — BokaDirekt webhook wired, 5-step sequence, analytics page, audit fixes in progress)
+**Phase:** Webhook integration active. Build currently broken (audit fix in progress — see Known Issues).
 
 ---
 
@@ -9,30 +9,24 @@
 
 A clinic rebooking engine built for Osteopaticentrum (Borås) that:
 1. Imports patient booking history from a BokaDirekt CSV export
-2. Cleans, deduplicates, and matches patients deterministically
-3. Calculates each patient's reminder eligibility using a 3-step SMS sequence (day 30, 60, 90)
-4. Sends the correct SMS in the sequence — manually or on a daily cron schedule
-5. Resets a patient's sequence when a new booking arrives via webhook, preserving full history
+2. Receives live booking events via BokaDirekt webhooks (BookingCreated / BookingUpdated / BookingCancelled)
+3. Stages incoming bookings for manual review and deterministic patient matching
+4. On confirmation: links patient, upserts booking, resets SMS cycle from day 0
+5. Sends a 5-step SMS sequence — manually (next sequential step, bypassing day threshold) or via daily cron (highest threshold crossed)
 6. Logs all activity and surfaces data quality issues for review
 
-One deployment per clinic. Supabase Auth gate in place. Multi-tenancy planned for V2.
-
-> **Future idea — white-label:** Upload a logo, the app extracts the brand colors and applies them automatically. Each clinic gets their own look without any manual theming. Potential path to selling this as a product rather than a bespoke deployment.
-
-> **Future idea — portal & isolated data:** Each clinic should eventually get their own login through a shared portal, with fully isolated data per tenant (own patients, bookings, settings, SMS logs). Right now everything lives in one shared Supabase project with no auth. Moving to per-user isolated data is the prerequisite for selling this to multiple clinics without manual re-deploys. See `docs/scalability.md` for the full breakdown.
+One deployment per clinic. Supabase Auth gate in place.
 
 ---
 
 ## Infrastructure
 
 - **Next.js 15** App Router + TypeScript, React 19
-- **Supabase** (Stockholm region, project `updomqqgivylpunzuanw`) — live, migration applied
-- **Storage**: all data in Supabase — `patients`, `bookings`, `reminder_settings`, `reminder_logs`, `review_items`, `daily_snapshots`, `incoming_sms`
-- **SMS**: 46elks adapter in `src/lib/sms/provider.ts` — credentials set locally + Vercel. Error responses now surface full 46elks API text in failed logs.
-- **Auth**: Supabase Auth via `@supabase/ssr`. Middleware at `middleware.ts` protects all `/app/*` and `/api/*` routes. Cron + webhook routes retain secret-based auth.
-- **Deployment**: Vercel, connected to `github.com/HaiDaPlug/sms-followup`, auto-deploys on push to `main`
+- **Supabase** (Stockholm region, project `updomqqgivylpunzuanw`) — migrations 001–009 applied
+- **SMS**: 46elks adapter in `src/lib/sms/provider.ts` — virtual number +46766864658
+- **Auth**: Supabase Auth via `@supabase/ssr`. Middleware protects `/app/*` and `/api/*`. Cron + webhook routes use secret-based auth.
+- **Deployment**: Vercel, auto-deploys on push to `main`
 - **Cron**: Vercel cron at `0 8 * * *` → `/api/cron/daily-reminders`
-- `typecheck` and `build` both pass clean
 
 ---
 
@@ -40,377 +34,141 @@ One deployment per clinic. Supabase Auth gate in place. Multi-tenancy planned fo
 
 | Variable | Local | Vercel | Notes |
 |---|---|---|---|
-| `SUPABASE_URL` | ✅ | ✅ | Set |
-| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | ✅ | Set |
-| `NEXT_PUBLIC_SUPABASE_URL` | ✅ | ✅ | Required for auth browser client |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | ✅ | Required for auth browser client |
+| `SUPABASE_URL` | ✅ | ✅ | |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | ✅ | |
+| `NEXT_PUBLIC_SUPABASE_URL` | ✅ | ✅ | |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | ✅ | |
 | `SMS_PROVIDER` | ✅ | ✅ | `46elks` |
-| `FORTYSIX_ELKS_USERNAME` | ✅ | ✅ | Set |
-| `FORTYSIX_ELKS_PASSWORD` | ✅ | ✅ | Set |
+| `FORTYSIX_ELKS_USERNAME` | ✅ | ✅ | |
+| `FORTYSIX_ELKS_PASSWORD` | ✅ | ✅ | |
 | `FORTYSIX_ELKS_FROM` | ✅ | ✅ | `OsteopatiC` |
 | `FORTYSIX_ELKS_VIRTUAL_NUMBER` | ⚠️ | ⚠️ | `+46766864658` — add to both |
-| `TEST_SMS_TO` | ✅ | — | For `/api/reminders/test` |
+| `BOKADIREKT_WEBHOOK_SECRET` | ❌ | ❌ | Must set — BokaDirekt sends `Tw8K6Pk2FVhvbYl1JE5zgyp4cWaq0fmIGX9BH3URAndit7Nx` |
+| `TEST_SMS_TO` | ✅ | — | |
 | `CRON_SECRET` | ✅ | — | Set before public URL |
-| `BOKADIREKT_WEBHOOK_SECRET` | — | — | Set before webhook goes live |
 
 ---
 
-## What's Built and Working
+## Pages
 
-### Pages
 | Route | Status | Notes |
 |-------|--------|-------|
-| `/app/dashboard` | Working | KPI strip with clickable modals, daily prognos, alerts, varningar, senaste aktivitet |
-| `/app/patients` | Working | Redesigned table with card-style rows, left-bar status accents, instant client-side search, sticky column header, bulk select + send (Gmail-style checkboxes), fill-sweep SMS + DNC buttons, status dot indicators |
-| `/app/sms-history` | Working | All contacted patients, full SMS log per patient, send + remove/reactivate actions |
-| `/app/import` | Working | Upload BokaDirekt CSV, Swedish summary labels |
-| `/app/review` | Working | Review queue with resolve/ignore actions |
-| `/app/settings` | Working | 3 SMS templates, timing, dry-run toggle with live label update, emoji picker per template, live UCS-2/character counter |
-| `/app/inbox` | Working | Incoming SMS from virtual number — filter obesvarade/alla, inline reply |
+| `/app/dashboard` | Working | KPI strip, modals, daily snapshot |
+| `/app/patients` | Working | Card rows, bulk select, status filters, manual send |
+| `/app/sms-history` | Working | Per-patient SMS log, bulk send, DNC toggle |
+| `/app/import` | Working | CSV upload, idempotent |
+| `/app/review` | Working | Review queue — failed SMS + pending booking matches |
+| `/app/settings` | Working | 5 editable SMS steps, dry-run toggle, emoji picker, char counter |
+| `/app/inbox` | Working | Incoming SMS from virtual number, inline reply |
+| `/app/analytics` | Working | Dual-line ECharts chart (bookings vs SMS), bookings table, period selector |
 
-### Dashboard — interactive KPI modals
-All four KPI cards are clickable and open modals:
-- **Redo för påminnelse** — paginated list (50/page) with Senast/Äldst sort toggle (Senast left, Äldst right) and "Skicka SMS" per row with fill-sweep hover effect. Sends immediately, patient slides out, KPI counts update live.
-- **SMS denna månad** — all sent logs this month with patient name, phone, sequence number, and date.
-- **Inväntar granskning** — open review items with title, description, and severity badge.
-- **Senaste aktivitet** — preview panel with "Visa alla ↗" button opening full activity history modal.
+---
 
-All modals share:
-- Dark green (`#073B2C`) header matching sidebar
-- Shimmer skeleton loading state
-- Staggered row entrance animations (Framer Motion)
-- Alternating row tints for readability
-- Escape key + backdrop click to close
+## API Routes
 
-### SMS-historik page (`/app/sms-history`)
-- Lists every patient who has received at least one SMS, sorted by most recent contact
-- Shows full badge history per patient (SMS 1, SMS 2, SMS 3, Testläge, Misslyckades)
-- **Ta bort** — marks patient as do-not-contact, removes from future send queue
-- **Återaktivera** — reactivates a blocked patient via new `/api/patients/[id]/reactivate` endpoint
-- **Skicka SMS** — disabled for blocked patients
-
-### Settings form
-- Three named sections: Klinik & timing / SMS-mallar / Körläge
-- Dry-run toggle is a card that changes color and label live
-- Primary buttons use brand dark green `#073B2C`
-
-### Branding
-- Sidebar: `#073B2C` (exact Osteopaticentrum brand green)
-- Logo: `public/osteopaticentrum.svg` — inverted white in sidebar
-- Accent: `#5bbfb5` (mint from website CTA)
-- Main area: pure white surfaces on `#f6f8f7` background
-
-### API Routes
 | Endpoint | Status | Notes |
 |----------|--------|-------|
-| `POST /api/import/bokadirekt` | Working | Accepts file upload or raw CSV — idempotent upsert on `external_booking_id` |
-| `GET /api/dashboard/stats` | Working | Powers dashboard KPI strip |
-| `GET /api/dashboard/ready-patients` | Working | Paginated (`?page&sort`), 50/page |
-| `GET /api/dashboard/sms-this-month` | Working | Sent logs this month with patient names |
-| `GET /api/dashboard/review-items` | Working | Open review items |
-| `GET /api/dashboard/activity` | Working | Full activity log with patient names |
-| `POST /api/reminders/send` | Working | Manual send for a single patient |
-| `POST /api/reminders/send-message` | Working | Send a literal pre-rendered message, resolves review item on success |
-| `POST /api/reminders/test` | Working | Send a test SMS to a given phone number |
-| `POST /api/patients` | Working | Manually create a patient (name, phone, email) |
-| `GET/POST /api/settings` | Working | Read/update settings |
-| `POST /api/patients/[id]/do-not-contact` | Working | Blocks patient from future SMS |
-| `POST /api/patients/[id]/reactivate` | Working | Re-enables a blocked patient |
-| `POST /api/review/[id]` | Working | Resolve/ignore review items |
-| `GET /api/cron/daily-reminders` | Working | Daily batch runner |
-| `POST /api/webhooks/bokadirekt` | Working | Import + cycle reset |
-| `POST /api/webhooks/sms-incoming` | Working | Receives incoming SMS from 46elks virtual number, matches to patient by phone |
-| `POST /api/sms/reply` | Working | Sends reply via 46elks, marks thread as replied |
-| `GET /api/sms/inbox` | Working | Returns incoming SMS joined with patient names |
-| `DELETE /api/logs/:id` | Working | Delete single log entry |
-| `DELETE /api/logs` | Working | Clear logs by patientId or all (confirm:true) |
-
-### Core Logic
-| Module | Status | Notes |
-|--------|--------|-------|
-| `src/lib/storage/store.ts` | Complete | Full Supabase implementation |
-| `src/lib/supabase/client.ts` | Complete | Service role singleton |
-| `src/lib/import/bokadirekt.ts` | Complete | Idempotent upserts, recalculates per touched patient |
-| `src/lib/reminders/eligibility.ts` | Complete | `getNextSequence()` drives all send decisions |
-| `src/lib/reminders/process.ts` | Complete | Per-patient send with correct template per step |
-| `src/lib/sms/provider.ts` | Complete | 46elks + generic webhook fallback |
-| `src/lib/data/repository.ts` | Complete | Re-export boundary |
+| `POST /api/import/bokadirekt` | Working | CSV upload, idempotent |
+| `GET /api/dashboard/*` | Working | stats, ready-patients, sms-this-month, review-items, activity |
+| `POST /api/reminders/send` | Working | Manual send — `forceNext` bypasses day threshold (NOT safety gates) |
+| `POST /api/reminders/send-message` | Working | Literal message, resolves review item |
+| `POST /api/reminders/test` | Working | Test SMS to configured phone |
+| `GET/POST /api/settings` | Working | |
+| `POST /api/patients` | Working | Manual patient creation |
+| `POST /api/patients/[id]/do-not-contact` | Working | |
+| `POST /api/patients/[id]/reactivate` | Working | |
+| `POST /api/review/[id]` | Working | Resolve/ignore |
+| `POST /api/review/confirm-booking-match` | Working | Confirm pending webhook booking → links patient, resets cycle |
+| `GET /api/analytics` | Working | Bookings + SMS grouped by week for chart |
+| `GET /api/cron/daily-reminders` | Working | Daily batch |
+| `POST /api/webhooks/bokadirekt` | Working | Stages pending_booking_match review item for manual confirmation |
+| `POST /api/webhooks/sms-incoming` | Working | 46elks incoming SMS → inbox |
+| `POST /api/webhooks/sms-delivery` | Working | 46elks delivery receipts |
+| `POST /api/sms/reply` | Working | Reply via 46elks |
+| `GET /api/sms/inbox` | Working | |
+| `DELETE /api/logs/:id` | Working | |
+| `DELETE /api/logs` | Working | |
 
 ---
 
 ## SMS Sequence Logic
 
-Up to 3 SMS per patient per booking cycle. Interval configured via **"Dagar mellan steg"** (default: 30).
+5 steps seeded in `reminder_settings.sms_steps` (migration 009). Mattias's real templates.
 
-| SMS | Skickas på dag | Mall |
-|-----|---------------|------|
-| 1 | 30 | `sms_template` |
-| 2 | 60 | `sms_template_2` |
-| 3 | 90 | `sms_template_3` |
+| SMS | Day threshold | Behaviour |
+|-----|--------------|-----------|
+| 1 | 5 | First follow-up |
+| 2 | 14 | Second follow-up (was 10, fix pending) |
+| 3 | 90 | 3-month check-in |
+| 4 | 180 | 6-month check-in |
+| 5 | 365 | 12-month check-in |
 
-- `getNextSequence()` checks days elapsed + logs since last `cycle_reset`
-- `dry_run` logs count as sent — toggling live mode won't re-send already-logged steps
-- Cycle reset writes a `cycle_reset` log; all history before it is preserved
-- CSV re-import is safe — fully idempotent, keyed on `external_booking_id` per booking and normalized phone per patient
+**Cron:** picks the **highest** threshold crossed that hasn't been sent yet. Patient at day 180 with no history → SMS 4. Next run waits for day 365.
+
+**Manual send (`forceNext=true`):** picks the **next sequential** unsent step, ignoring date threshold. SMS 1 sent, day 8 → sends SMS 2.
+
+**Safety gates (always enforced, even on force):** Do not contact, Missing phone, Future booking, Needs review, No valid booking.
+
+**Cycle reset:** triggered only on confirmed booking match (manual confirmation in Review page). Writes `is_cycle_reset=true` log. All prior history preserved before that log.
 
 ---
 
-## Architecture
+## BokaDirekt Webhook Integration
 
-```
-BokaDirekt CSV / Webhook
-      ↓
-/api/import/bokadirekt  OR  /api/webhooks/bokadirekt
-      ↓
-src/lib/import/bokadirekt.ts
-  → normalizes rows
-  → upserts patients row-by-row (Supabase)
-  → upserts bookings row-by-row (Supabase)
-  → recalculates last_booking_at / has_future_booking per touched patient
-  → creates review items for data quality issues
+**Confirmed payload shape** (from live test 2026-06-05):
+- Auth: `webhook-secret` header (not `x-webhook-secret`)
+- Event type: `webhook-event` header — `BookingCreated`, `BookingUpdated`, `BookingCancelled`
+- Key fields: `Customer.MobilePhoneNumber`, `Customer.EmailAdress` (note typo), `Customer.Id`, `BookingStartDate`, `ServiceName`, `PersonName`, `Cancelled` boolean, `EventCreated`
 
-[Webhook only]
-  → matches patient by phone/email
-  → resetPatientCycle() → INSERT reminder_logs (cycle_reset)
-      ↓
-Supabase  ←→  src/lib/storage/store.ts  ←→  src/lib/data/repository.ts
-      ↓
-src/lib/reminders/eligibility.ts
-  → calculatePatientReminderStatus
-  → getNextSequence() → Ready (sequence 1/2/3) / Waiting / Sent
-      ↓
-src/lib/reminders/process.ts
-  → sendReminderToPatient
-      picks sms_template / _2 / _3
-      if dry_run → log status=dry_run
-      if live → src/lib/sms/provider.ts → 46elks
-      → INSERT reminder_logs with sequence_number
-```
+**Webhook URL:** `https://sms-followup.vercel.app/api/webhooks/bokadirekt` (all 3 event types → same endpoint)
+
+**Matching tiers:**
+1. `bokadirekt_customer_id` exact match
+2. `normalized_phone` exact match
+3. `email` exact match
+
+No auto-confirm — always creates a `pending_booking_match` review item. Dedup via `content_hash: bokadirekt-booking:{Id}` (prevents duplicates on retry).
+
+---
+
+## Migrations Applied (001–009)
+
+| Migration | What it adds |
+|-----------|-------------|
+| 001 | Base schema: patients, bookings, reminder_settings, reminder_logs, review_items |
+| 002 | `content_hash` unique index on review_items |
+| 003 | `sms_steps` JSONB on reminder_settings |
+| 004 | reminder_logs hardening: CHECK constraint, unique indexes |
+| 005 | `skip_reason`, `daily_snapshots`, future-booking index |
+| 006 | `incoming_sms` table |
+| 007 | `allow_same_number_override` on reminder_settings |
+| 008 | Webhook fields on bookings/patients: `bokadirekt_booking_id`, `bokadirekt_customer_id`, `service_name`, `practitioner_name`, `booking_date`, `location_name`, `price`, `booked_online`, `cancelled` |
+| 009 | Seed 5-step SMS sequence with Mattias's real templates |
+
+**Pending migrations (audit fixes):**
+- `010_fix_sms2_day.sql` — change SMS step 2 from day 10 → day 14
+- `011_add_event_created_at.sql` — add `event_created_at` to bookings for analytics
+
+---
+
+## Known Issues (Audit — Fix in Progress)
+
+1. **Build broken** — `resolvedPatientId: string | null` passed to `resetPatientCycle(patientId: string)` in `bokadirekt.ts:225`. TypeScript rejects it.
+2. **Confirm booking doesn't set `last_booking_at`** — patient never becomes "Ready" after confirmation.
+3. **Sequence logic picks earliest not highest** — day-180 patient gets SMS 1 instead of SMS 4.
+4. **`forceNext` bypasses safety gates** — do-not-contact etc. can receive SMS via manual send.
+5. **Cancellation incomplete** — doesn't undo cycle reset, doesn't update `last_booking_at`, cancelled bookings still block SMS via future-booking gate.
+6. **Analytics groups by appointment date** — should use `EventCreated`/`created_at`; dry_run counted as sent.
 
 ---
 
 ## What Still Needs to Be Done
 
-## Current Priorities
-
-### 1. Prove the core SMS loop
-- [x] Add 46elks credentials to Vercel env vars
-- [x] Turn off dry-run mode
-- [x] Confirmed SMS delivery end-to-end with Swedish characters
-- [x] Delivery receipts via `whendelivered` callback
-
-### 2. Multi-tenant portal with per-user isolated data (next priority after webhooks)
-- [x] Add auth (Supabase Auth) — login gate in place
-- [ ] Add a `clinic_id` foreign key to all tables (`patients`, `bookings`, `reminder_settings`, `reminder_logs`, `review_items`)
-- [ ] All queries scoped by `clinic_id` — no clinic can see another's data
-- [ ] Shared portal at the root domain — clinics log in and land on their own isolated dashboard
-- [ ] Each clinic manages their own settings, SMS templates, and patient list independently
-- [ ] See `docs/scalability.md` for the full architectural breakdown
-- [ ] Prerequisite for selling this to multiple clinics without manual re-deploys
-
-### 3. Wire in BokaDirekt webhooks (automatic booking updates)
-- [ ] Get a real webhook payload sample from BokaDirekt to confirm field names (`phone`/`Phone`/`mobilnummer` etc.)
-- [ ] Update `src/lib/webhooks/bokadirekt.ts` field mapping to match real payload
-- [ ] Set `BOKADIREKT_WEBHOOK_SECRET` in Vercel and verify signature check in `/api/webhooks/bokadirekt`
-- [ ] Register the webhook URL with BokaDirekt pointing to `https://<your-domain>/api/webhooks/bokadirekt`
-- [ ] Test: make a real booking and confirm patient `last_booking_at` updates and cycle resets automatically
-
-### 4. Domain
-- [ ] Decide on a domain for the portal (e.g. app.khyte.se, rebooking.se, or clinic-specific subdomain)
-- [ ] Add custom domain in Vercel once decided
-
-### 5. Before sharing the URL publicly
-- [ ] Set `CRON_SECRET` — without it anyone can trigger mass SMS sends
-- [ ] Set `BOKADIREKT_WEBHOOK_SECRET` — see priority 2 above
-- [ ] Add auth to `/api/settings` and `/api/reminders/send`
-
-### Recently completed (2026-06-04 — session 8)
-
-#### Template selector dropdown on SMS send button
-- `PatientActions` now accepts a `steps` prop (`TemplateStep[]`) — when steps are present, a compact dropdown appears to the left of the "Skicka SMS" button
-- Dropdown options: **Automatisk** (uses normal eligibility logic to pick the next due step) + **Mall 1 (dag X)**, **Mall 2 (dag Y)**, etc. for each configured step
-- Selecting a specific template passes `sequenceOverride` to the API, bypassing the "patient not eligible" guard so any template can be forced regardless of where the patient is in their sequence
-- `POST /api/reminders/send` now accepts optional `sequenceOverride: number` in the request body
-- `sendReminderToPatient()` in `process.ts` accepts optional `sequenceOverride` — when set, skips eligibility blocking and uses that 1-based sequence index directly
-- Steps are resolved server-side in `patients/page.tsx` via `resolveSteps(settings)` and threaded down through `PatientsClient` → `PatientActions`
-
-### Recently completed (2026-05-11 — session 7)
-
-#### Bulk select & send (Gmail-style)
-- Patients page refactored into `PatientsClient.tsx` (client component) — server page keeps data fetching
-- Checkbox column added as first column in every patient row + select-all in header
-- Dark green sticky bulk action bar appears when ≥1 patient selected: shows count, "Skicka SMS till valda" button, and "Avmarkera" — fires sends sequentially with live `Skickar X/Y…` progress
-- SMS history page (`SmsHistoryClient`) also gets checkboxes on each patient card + same bulk send bar
-
-#### Dashboard "Redo" popup SMS count
-- `GET /api/dashboard/ready-patients` now includes `smsCount` per patient
-- The "Redo för påminnelse" modal in `KpiStrip` shows "N SMS skickate" in teal below each patient's name when they've previously received SMS — no click required
-
-#### Test override setting (`allow_same_number_override`)
-- New boolean setting: **Tillåt test-SMS till samma nummer** — red-tinted card in Körläge section of settings
-- When on: bypasses the sequence-complete guard — patients with status "Sent" can still receive SMS (forces sequence step 1). Only applies to manual sends, not the daily cron.
-- Migration: `supabase/migrations/007_allow_same_number_override.sql` — run in Supabase SQL editor
-
-### Recently completed (2026-05-08 — session 6)
-
-#### Import robustness
-- `onConflict` fixed to `external_booking_id` — re-importing same CSV no longer throws unique constraint violation
-- `bookingMap` keyed by `external_booking_id` — duplicate rows in CSV no longer cause "ON CONFLICT DO UPDATE command cannot affect row a second time"
-- `review_items` dedup replaced partial-index upsert (unsupported) with fetch-then-insert pattern
-- `readStoreForImport()` — slim query (no logs/review_items/full booking columns) fixes import timeout on large DBs
-
-#### Pilot hardening (migration 005)
-- `skip_reason` enum column on `reminder_logs` — machine-readable skip reasons, queryable without text parsing
-- `daily_snapshots` table — one row per cron run: full cohort breakdown (ready/waiting/future_booking/…) + SMS sent/dry_run/failed counts. Full time series after 30 days of pilot.
-- Index on `bookings(patient_id, booking_at)` for fast live future-booking checks
-- `has_future_booking` refreshed from live bookings at the start of every cron run — stored flag can no longer go stale
-- N+1 eliminated: `processDailyReminders` loads store once and passes it down, no per-patient DB refetch
-
-#### Incoming SMS inbox (migration 006)
-- `incoming_sms` table: stores all messages received on virtual number +46766864658, matched to patient by normalized phone
-- `POST /api/webhooks/sms-incoming` — 46elks webhook, validates `to` against `FORTYSIX_ELKS_VIRTUAL_NUMBER`, auto-matches sender to patient
-- `POST /api/sms/reply` — sends reply via 46elks, marks thread as `replied_at`
-- `/app/inbox` page — filter tabs (Obesvarade / Alla), inline reply box, Ctrl+Enter to send, replied thread shows sent reply preview
-- **To activate:** set `FORTYSIX_ELKS_VIRTUAL_NUMBER=+46766864658` in `.env.local` and Vercel, then point 46elks SMS URL to `https://yourdomain.com/api/webhooks/sms-incoming`
-
-#### SMS template editor
-- Emoji picker per template: 😊 button, 3 tabs (Vanliga/Hälsa/Tid), search box, picker stays open for multi-insert
-- Live character counter: expands `{{placeholders}}` with example values before counting (shows `~235 tecken` not raw template length)
-- UCS-2 detection: badge shows which specific character triggered non-GSM-7 encoding (`Orsakas av: "–"`)
-- Correct UCS-2 billing unit counting: supplementary emoji (e.g. 😊 = U+1F600) counted as 2 units, not 1
-
-### Recently completed (2026-05-04 — session 5)
-
-#### Database hardening (`supabase/migrations/004_reminder_logs_hardening.sql`)
-- `CHECK` constraint on `reminder_logs.status` — DB rejects unknown values at write time
-- `UNIQUE` partial index on `provider_message_id` — webhook can never update two rows for the same message
-- `UNIQUE` partial index on `(patient_id, sequence_number)` for sent/dry_run/delivered — physically impossible to send the same sequence step twice (guards double cron fires)
-- Index on `(patient_id, created_at DESC)` — fast per-patient log queries as data grows
-- Failed sends now store `sequence_number` so you always know which step failed
-
-#### API hardening
-- `send-message/route.ts`: phone validated with regex before hitting provider; `sendSms()` wrapped in try/catch; failed sends always store sequence_number
-- `send/route.ts`: JSON parse guarded, full try/catch, response now includes `error` field on failures
-- `sms-delivery/route.ts` (webhook): handles both form-encoded and JSON payloads; unknown status values logged as warnings; verifies DB row was actually found after update
-- `processDailyReminders()` now returns per-patient breakdown: `{ name, status, error, sequenceNumber }` for every patient processed plus totals — each patient wrapped in try/catch so one crash can't abort the batch
-- `FailedSmsActions.tsx`: resolve/ignore now checks response and shows error inline instead of silently reloading
-- `SmsHistoryActions.tsx`: checks response before reloading, shows error inline on failure
-
-#### Patient search fix
-- `PatientSearch` previously did client-side DOM filtering — only searched the 50 patients on the current page
-- Now debounces 350ms then calls `router.push()` with `?q=` param, triggering full server-side search across all patients before pagination
-
-#### Per-patient SMS popup
-- Click any patient name in the patient list → modal showing all their SMS logs: sequence, status badge, message preview, timestamp, error if any
-- "N SMS skickade" counter shown under the name when they have sent logs
-- Each log entry has a × delete button
-
-#### SMS history page redesign
-- Flat table replaced with card layout — one card per patient, colored left-border accent (red = failed, mint = sent, orange = mixed)
-- Log entries shown as inline pill chips: colored dot + label + date + × delete — much cleaner than stacked badges
-- Three filter tabs (Alla / Misslyckade / Skickade) as a proper segmented control — counts update in real-time as logs are deleted
-- Per-patient "Rensa" ghost button with trash icon instead of full danger button
-- "Rensa all historik" outlined danger button with confirm dialog
-- `DELETE /api/logs/:id` — delete single log entry
-- `DELETE /api/logs?patientId=x` — clear all logs for one patient
-- `DELETE /api/logs` (body `{ confirm: true }`) — wipe all history
-
-#### Logo
-- Clicking the sidebar logo navigates to `/app/dashboard`
-
-### Recently completed (2026-05-04 — session 4)
-
-#### SMS end-to-end fix
-- Root cause found: Swedish characters (å, ä, ö) in SMS templates were being rejected by 46elks due to missing `charset=utf-8` in the Content-Type header. Fixed in `src/lib/sms/provider.ts`.
-- Confirmed working — test SMS delivered successfully to +46700996838
-- 46elks `whendelivered` callback added — 46elks POSTs delivery status back to `/api/webhooks/sms-delivery`, which updates `reminder_logs` row to `delivered` or `failed` via `provider_message_id`
-- `"delivered"` added to `ReminderLogStatus` type and counted as sent in sequence eligibility logic (prevents re-sending already-delivered steps)
-- SMS-historik now shows `delivered` (mint ✓), `sent` (blue, awaiting receipt), `failed` (red ✗ with error tooltip on hover)
-
-#### Add patient — booking date field
-- "Senaste bokning" date picker added to the add patient modal
-- API route accepts `last_booking_at` and stores it — manually added patients can now be set as "Redo" immediately
-- Fixes the "Ingen giltig bokning" skip for manually added test patients
-
-### Recently completed (2026-05-04 — session 3)
-
-#### Auth gate
-- Supabase Auth via `@supabase/ssr` — cookie-based sessions, works with Next.js 15 App Router
-- `middleware.ts` at project root — protects all `/app/*` and `/api/*`, cron/webhook routes bypass via secret auth
-- `/login` page — split-screen layout: dark green left panel with interactive canvas particle field (nervous system aesthetic), white right panel with Cormorant Garamond heading and DM Sans inputs
-- Particle field: 72 nodes (white + mint), lines connect within 120px, cursor repels nearby particles, proximity glow on hover
-- `LogoutButton` in sidebar footer — signs out and redirects to `/login`
-- Browser client (`src/lib/supabase/browser.ts`) + server client (`src/lib/supabase/server.ts`) using anon key
-- Requires `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in env
-
-#### Patient management
-- **Delete patient** — `DELETE /api/patients/[id]` permanently removes patient from Supabase. Confirm dialog before firing.
-- **DNC toggle** — "Kontakta ej" button now toggles: shows green "Återaktivera" when patient is already DNC, calls `/reactivate` endpoint
-- `PatientActions` receives `doNotContact` prop from patients page — no extra fetch needed
-
-#### SMS debugging
-- 46elks error responses now surface full raw API text in failed SMS logs instead of generic status code
-
-### Recently completed (2026-05-03 — session 2)
-
-#### Patients page redesign
-- Card-style rows with a 4px colored left-bar keyed to status (mint = ready/sent, blue = future, red = alert, amber = do-not-contact, grey = inactive)
-- Alternating row depth + mint hover tint
-- Sticky column header pulled outside scroll container — stays visible while scrolling 970 rows
-- Inline pagination (← 1/20 →) lives in the "Åtgärder" header cell — no scrolling to bottom to change pages
-- Instant client-side search via `PatientSearch` component — filters rows on every keystroke, updates count chip live, no network round-trip
-- Fill-sweep "Skicka SMS" button (dark green → mint sweep) and fill-sweep "Kontakta ej" (transparent → red sweep), consistent with dashboard modal buttons
-- Status badges redesigned: dot indicator + label in sentence case, no background fills. Ready = mint dot, Sent = darker mint, Future = steel blue, alert states = red, Waiting = warm grey, Do not contact = amber
-- Filter pills changed from full-pill to rounded rectangles (radius-sm), consistent with the rest of the UI
-- Control bar: title + count chip inline, segmented sort toggle, expanding search input
-- "Skicka SMS" fill-sweep also applied to KPI modal for consistency
-
-### Recently completed (2026-05-03 — session 1)
-
-#### Hardening
-- Review items are now idempotent on re-import — upsert on `content_hash`, no more duplicates
-- `do_not_contact` flag is never overwritten by import — blocked patients stay blocked
-- `has_future_booking` is now checked live against bookings at eligibility time, not from a stale stored flag
-- Patients can be added manually via UI (`+ Lägg till patient` on `/app/patients`)
-
-#### Dynamic SMS steps
-- "Dagar mellan steg" removed — each SMS step now has its own individually configurable day threshold
-- Steps editable inline: click the "dag 30" chip to type a new value, add/remove steps freely
-- `sms_steps` JSONB column drives eligibility; legacy 3-template columns kept in sync for backwards compat
-- `resolveSteps()` in `src/lib/reminders/steps.ts` is the single source of truth used by eligibility, process, and the form
-
-#### Failed SMS review loop
-- Failed or skipped sends (including unresolved `{{placeholders}}`) automatically create a `failed_sms` review item containing the fully rendered message
-- `/app/review` shows an inline editable textarea for `failed_sms` items — tweak the specific message and hit "Skicka nu" without touching the global template
-- `POST /api/reminders/send-message` sends a literal message string, bypasses template rendering, logs the result, and auto-resolves the review item on success
-- Template rendering validated before every send — any unresolved `{{token}}` blocks the send and surfaces in the review queue
-
-#### Pending migrations (run in Supabase SQL editor if not yet applied)
-```sql
--- 002
-alter table review_items add column if not exists content_hash text;
-create unique index if not exists review_items_content_hash_idx
-  on review_items (content_hash) where content_hash is not null;
-
--- 003
-alter table reminder_settings add column if not exists sms_steps jsonb;
-
--- 004 (session 5)
--- Run supabase/migrations/004_reminder_logs_hardening.sql
-
--- 005 (session 6)
--- Run supabase/migrations/005_robustness.sql
-
--- 006 (session 6)
--- Run supabase/migrations/006_incoming_sms.sql
-
--- 007 (session 7)
--- Run supabase/migrations/007_allow_same_number_override.sql
-```
-
-### Known limitations
-- Webhook field names (`phone`, `Phone`, `mobilnummer`) are guesses until real BokaDirekt samples arrive
-- Medium-confidence patient matches imported optimistically, flagged in review queue
+- [ ] Apply audit fixes (see Known Issues above)
+- [ ] Set `BOKADIREKT_WEBHOOK_SECRET` in Vercel
+- [ ] Set `CRON_SECRET` in Vercel
+- [ ] Multi-tenant portal (clinic_id on all tables, per-clinic isolated data)
+- [ ] Domain decision
 
 ---
 
@@ -418,5 +176,4 @@ alter table reminder_settings add column if not exists sms_steps jsonb;
 
 - Supabase project: `https://supabase.com/dashboard/project/updomqqgivylpunzuanw`
 - GitHub repo: `https://github.com/HaiDaPlug/sms-followup`
-- Supabase schema: `supabase/migrations/001_clinic_rebooking.sql`
-- Environment variable reference: `.env.example`
+- Webhook payload confirmed: `docs/` — see session 9 conversation
