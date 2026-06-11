@@ -11,6 +11,8 @@ interface Props {
 }
 
 const statusSv: Record<string, string> = {
+  pending:     "Skickas",
+  unknown:     "Leverans okänd",
   sent:        "Skickat",
   delivered:   "Levererat",
   dry_run:     "Testläge",
@@ -22,7 +24,7 @@ const statusSv: Record<string, string> = {
 function badgeClass(status: string) {
   if (status === "delivered") return "ready";
   if (status === "sent" || status === "dry_run") return "future";
-  if (status === "failed") return "review";
+  if (status === "failed" || status === "unknown") return "review";
   return "waiting";
 }
 

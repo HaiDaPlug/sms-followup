@@ -20,6 +20,7 @@ const statusAccent: Record<string, string> = {
   "Future booking":   "#1a4f78",
   "Missing phone":    "#a33030",
   "Needs review":     "#a33030",
+  "Delivery pending": "#a33030",
   "Do not contact":   "#7a5200",
   Waiting:            "#c8d4d0",
   "No valid booking": "#c8d4d0",
@@ -32,6 +33,7 @@ const statusLabels: Record<string, string> = {
   "Missing phone":    "Saknar telefon",
   "Do not contact":   "Kontakta ej",
   "Needs review":     "Behöver granskas",
+  "Delivery pending": "Leverans väntar",
   Waiting:            "Väntar",
   "No valid booking": "Ingen giltig bokning",
 };
@@ -40,7 +42,7 @@ function badgeClass(status: string) {
   if (status === "Ready" || status === "Sent") return "ready";
   if (status === "Future booking") return "future";
   if (status === "Missing phone") return "missing";
-  if (status === "Needs review") return "review";
+  if (status === "Needs review" || status === "Delivery pending") return "review";
   if (status === "Do not contact") return "ignored";
   return "waiting";
 }
@@ -65,6 +67,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
   const [bulkState, setBulkState] = useState<BulkState>("idle");
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
+  const [bulkErrors, setBulkErrors] = useState<{ name: string; reason: string }[]>([]);
 
   const allIds = rows.map((r) => r.patient.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
@@ -97,33 +100,44 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
     if (bulkState !== "idle") return;
     const ids = [...selected];
     setBulkState("sending");
+    setBulkErrors([]);
     setProgress({ done: 0, total: ids.length });
 
     let sent = 0;
-    let failed = 0;
+    const failures: { name: string; reason: string }[] = [];
     for (const id of ids) {
+      const patientName = rows.find((r) => r.patient.id === id)?.patient.full_name ?? id;
       try {
         const res = await fetch("/api/reminders/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ patientId: id, forceNext: true }),
         });
-        const data = await res.json();
+        const data = await res.json() as { status?: string; error?: string };
         const ok = data.status === "sent" || data.status === "dry_run";
-        if (ok) sent++; else failed++;
-      } catch {
-        failed++;
+        if (ok) {
+          sent++;
+          console.log("[PatientsClient] sent ok", { patientId: id, status: data.status });
+        } else {
+          const reason = data.error ?? data.status ?? `HTTP ${res.status}`;
+          failures.push({ name: patientName, reason });
+          console.error("[PatientsClient] send failed", { patientId: id, httpStatus: res.status, status: data.status, error: data.error });
+        }
+      } catch (err) {
+        failures.push({ name: patientName, reason: "Nätverksfel" });
+        console.error("[PatientsClient] network error", { patientId: id, err });
       }
       setProgress((p) => ({ ...p, done: p.done + 1 }));
     }
 
     setBulkState("done");
-    const msg = failed === 0
+    setBulkErrors(failures);
+    const msg = failures.length === 0
       ? `${sent} SMS skickade`
-      : `${sent} skickade, ${failed} misslyckades`;
+      : `${sent} skickade, ${failures.length} misslyckades`;
     setDoneMessage(msg);
     setSelected(new Set());
-    setTimeout(() => { setBulkState("idle"); setDoneMessage(null); }, 4000);
+    setTimeout(() => { setBulkState("idle"); setDoneMessage(null); setBulkErrors([]); }, 10000);
   }
 
   return (
@@ -329,7 +343,14 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
             <span className="pt-bulk-msg">Skickar {progress.done}/{progress.total}…</span>
           )}
           {bulkState === "done" && doneMessage && (
-            <span className="pt-bulk-msg">{doneMessage}</span>
+            <span className="pt-bulk-msg" style={{ color: bulkErrors.length > 0 ? "var(--red)" : undefined }}>
+              {doneMessage}
+            </span>
+          )}
+          {bulkState === "done" && bulkErrors.length > 0 && (
+            <span style={{ fontSize: 11.5, color: "var(--red)", lineHeight: 1.4 }}>
+              {bulkErrors.map((e) => `${e.name}: ${e.reason}`).join(" · ")}
+            </span>
           )}
           <button
             className="pt-bulk-send"

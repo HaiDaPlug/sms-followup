@@ -1,7 +1,15 @@
 export type BookingStatus = "Booked" | "Cancelled" | "Unknown" | string;
 export type ReviewStatus = "open" | "resolved" | "ignored";
 export type ReviewSeverity = "low" | "medium" | "high";
-export type ReminderLogStatus = "sent" | "delivered" | "failed" | "dry_run" | "skipped" | "cycle_reset";
+export type ReminderLogStatus =
+  | "pending"
+  | "unknown"
+  | "sent"
+  | "delivered"
+  | "failed"
+  | "dry_run"
+  | "skipped"
+  | "cycle_reset";
 export type SkipReason =
   | "future_booking"
   | "missing_phone"
@@ -10,7 +18,8 @@ export type SkipReason =
   | "no_valid_booking"
   | "waiting"
   | "unresolved_placeholder"
-  | "sequence_complete";
+  | "sequence_complete"
+  | "delivery_pending";
 
 export type Patient = {
   id: string;
@@ -191,6 +200,7 @@ export type PatientReminderStatus =
   | "Missing phone"
   | "Do not contact"
   | "Needs review"
+  | "Delivery pending"
   | "Waiting"
   | "No valid booking";
 

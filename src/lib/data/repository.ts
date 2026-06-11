@@ -19,6 +19,7 @@ export {
   touchBooking,
   touchPatient,
   updatePatient,
+  updateReminderLog,
   updateReviewItem,
   updateSettings,
   upsertBooking,

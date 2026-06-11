@@ -18,24 +18,35 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
   async function send() {
     setBusy("send");
     setResult(null);
-    const res = await fetch("/api/reminders/send-message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        patient_id: patientId,
-        phone,
-        message,
-        review_id: reviewId,
-        sequence_number: sequenceNumber,
-      }),
-    });
-    const data = await res.json().catch(() => ({})) as { status?: string; error?: string };
+    let res: Response;
+    let data: { status?: string; error?: string } = {};
+    try {
+      res = await fetch("/api/reminders/send-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patient_id: patientId,
+          phone,
+          message,
+          review_id: reviewId,
+          sequence_number: sequenceNumber,
+        }),
+      });
+      data = await res.json().catch(() => ({}));
+    } catch (err) {
+      console.error("[FailedSmsActions] network error", err);
+      setBusy(null);
+      setResult({ ok: false, text: "Nätverksfel — kontrollera anslutningen" });
+      return;
+    }
     setBusy(null);
     if (res.ok) {
+      console.log("[FailedSmsActions] send ok", { status: data.status, reviewId, sequenceNumber });
       setResult({ ok: true, text: data.status === "dry_run" ? "Loggad (testläge)" : "Skickat!" });
       setTimeout(() => window.location.reload(), 900);
     } else {
-      setResult({ ok: false, text: data.error ?? "Misslyckades" });
+      console.error("[FailedSmsActions] send failed", { httpStatus: res.status, error: data.error, reviewId, patientId, sequenceNumber });
+      setResult({ ok: false, text: `[${res.status}] ${data.error ?? "Misslyckades"}` });
     }
   }
 

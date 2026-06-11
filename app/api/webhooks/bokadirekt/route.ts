@@ -3,7 +3,7 @@ import { handleBokaDirektWebhook } from "@/lib/webhooks/bokadirekt";
 
 function authorized(request: Request) {
   const secret = process.env.BOKADIREKT_WEBHOOK_SECRET;
-  if (!secret) return true;
+  if (!secret) return false;
   return request.headers.get("webhook-secret") === secret;
 }
 

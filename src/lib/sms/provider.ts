@@ -71,8 +71,9 @@ async function sendWith46Elks({ to, message }: SendSmsInput): Promise<SendSmsRes
     };
   }
 
-  const deliveryUrl = process.env.NEXT_PUBLIC_APP_URL
-    ? `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/sms-delivery`
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+  const deliveryUrl = appUrl.startsWith("https://")
+    ? `${appUrl}/api/webhooks/sms-delivery`
     : undefined;
 
   const form = new URLSearchParams({

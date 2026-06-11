@@ -16,10 +16,20 @@ const filterLabels: Record<string, string> = {
   "Future booking": "Har bokat en tid",
   "Missing phone": "Saknar telefon",
   "Do not contact": "Kontakta ej",
-  "Needs review": "Behöver granskas"
+  "Needs review": "Behöver granskas",
+  "Delivery pending": "Leverans väntar"
 };
 
-const filters = ["all", "Ready", "Sent", "Future booking", "Missing phone", "Do not contact", "Needs review"];
+const filters = [
+  "all",
+  "Ready",
+  "Sent",
+  "Future booking",
+  "Missing phone",
+  "Do not contact",
+  "Needs review",
+  "Delivery pending",
+];
 
 const PAGE_SIZE = 50;
 

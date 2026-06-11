@@ -155,6 +155,25 @@ export async function addReminderLog(
   return data as ReminderLog;
 }
 
+export async function updateReminderLog(
+  id: string,
+  patch: Partial<Pick<ReminderLog, "status" | "provider_message_id" | "error" | "sent_at">>,
+  expectedStatus?: ReminderLog["status"]
+): Promise<ReminderLog> {
+  let query = supabase
+    .from("reminder_logs")
+    .update(patch)
+    .eq("id", id);
+  if (expectedStatus) {
+    query = query.eq("status", expectedStatus);
+  }
+  const { data, error } = await query
+    .select()
+    .single();
+  throwOnError(data, error, "reminder_logs update");
+  return data as ReminderLog;
+}
+
 export async function resetPatientCycle(
   patientId: string,
   bookingId: string | null

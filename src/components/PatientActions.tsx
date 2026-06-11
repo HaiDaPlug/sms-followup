@@ -218,6 +218,7 @@ export function PatientActions({
   steps?: TemplateStep[];
 }) {
   const [sendState, setSendState] = useState<SendState>("idle");
+  const [sendError, setSendError] = useState<string | null>(null);
   const [dncBusy, setDncBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [isDnc, setIsDnc] = useState(doNotContact);
@@ -228,6 +229,7 @@ export function PatientActions({
   async function handleSend() {
     if (sendState !== "idle") return;
     setSendState("sending");
+    setSendError(null);
     try {
       const body: { patientId: string; sequenceOverride?: number; forceNext: boolean } = { patientId, forceNext: true };
       if (selectedSeq !== null) body.sequenceOverride = selectedSeq;
@@ -236,14 +238,24 @@ export function PatientActions({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
+      const data = await res.json() as { status?: string; error?: string };
       const ok = data.status === "sent" || data.status === "dry_run";
-      setSendState(ok ? "sent" : "failed");
-      if (ok) setTimeout(() => window.location.reload(), 900);
-      else setTimeout(() => setSendState("idle"), 3000);
-    } catch {
+      if (ok) {
+        console.log("[PatientActions] send ok", { patientId, status: data.status });
+        setSendState("sent");
+        setTimeout(() => window.location.reload(), 900);
+      } else {
+        const errText = `[${res.status}] ${data.error ?? data.status ?? "Okänt fel"}`;
+        console.error("[PatientActions] send failed", { patientId, httpStatus: res.status, status: data.status, error: data.error });
+        setSendError(errText);
+        setSendState("failed");
+        setTimeout(() => { setSendState("idle"); setSendError(null); }, 6000);
+      }
+    } catch (err) {
+      console.error("[PatientActions] network error", { patientId, err });
+      setSendError("Nätverksfel");
       setSendState("failed");
-      setTimeout(() => setSendState("idle"), 3000);
+      setTimeout(() => { setSendState("idle"); setSendError(null); }, 6000);
     }
   }
 
@@ -276,10 +288,11 @@ export function PatientActions({
     : sendState === "failed" ? "Misslyckades"
     : "Skicka SMS";
 
+
   const smsClass = `pa-sms-btn${sendState !== "idle" ? ` pa-${sendState}` : ""}`;
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
       {steps.length > 0 && (
         <select
           className="pa-tpl-select"
@@ -310,6 +323,12 @@ export function PatientActions({
           {smsLabel}
         </span>
       </button>
+
+      {sendError && (
+        <span style={{ fontSize: 11.5, color: "#a33030", fontWeight: 500, maxWidth: 260, whiteSpace: "normal", lineHeight: 1.3 }}>
+          {sendError}
+        </span>
+      )}
 
       {isDnc ? (
         <button

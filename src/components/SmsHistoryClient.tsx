@@ -3,6 +3,8 @@
 import { useState, useCallback } from "react";
 
 const statusSv: Record<string, string> = {
+  pending:   "Skickas",
+  unknown:   "Leverans okänd",
   sent:      "Skickat",
   delivered: "Levererat",
   dry_run:   "Testläge",
@@ -11,6 +13,8 @@ const statusSv: Record<string, string> = {
 };
 
 function chipColor(status: string): { dot: string; text: string; bg: string; border: string } {
+  if (status === "pending")   return { dot: "#c28a2c", text: "#7a5200", bg: "#fff8e8", border: "#ead9ad" };
+  if (status === "unknown")   return { dot: "#e08040", text: "#8a451d", bg: "#fff3eb", border: "#efd3c2" };
   if (status === "delivered") return { dot: "#5bbfb5", text: "#1a6b5c", bg: "#edf7f6", border: "#b8e8e5" };
   if (status === "sent")      return { dot: "#3da89d", text: "#2a7a68", bg: "#edf7f6", border: "#b8e8e5" };
   if (status === "dry_run")   return { dot: "#4a8ab5", text: "#1a4f78", bg: "#edf3fa", border: "#c8dced" };

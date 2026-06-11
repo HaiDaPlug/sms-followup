@@ -34,7 +34,7 @@ export function latestValidBooking(patient: Patient, bookings: Booking[]) {
  * Returns logs for this patient since the most recent cycle_reset (or all logs
  * if there has never been a reset). Logs are assumed to be sorted newest-first.
  */
-function logsInCurrentCycle(patientId: string, logs: ReminderLog[]): ReminderLog[] {
+export function logsInCurrentCycle(patientId: string, logs: ReminderLog[]): ReminderLog[] {
   const patientLogs = logs.filter((l) => l.patient_id === patientId);
   const resetIdx = patientLogs.findIndex((l) => l.is_cycle_reset);
   // Everything before the reset index is in the current cycle
@@ -67,18 +67,20 @@ export function getNextSequence(
 
   if (maxSentSeq >= steps.length) return null; // full sequence complete
 
-  if (force) {
-    // Manual send: next sequential step in the sequence, date threshold ignored
-    const nextStep = steps[maxSentSeq];
-    if (!nextStep) return null;
-    return { sequenceNumber: maxSentSeq + 1, daysThreshold: nextStep.day };
-  } else {
-    // Cron: jump to the highest threshold that has been crossed (and not yet sent)
-    const eligible = steps.filter((s, i) => i >= maxSentSeq && days >= s.day);
-    const nextStep = eligible[eligible.length - 1];
-    if (!nextStep) return null;
-    return { sequenceNumber: steps.indexOf(nextStep) + 1, daysThreshold: nextStep.day };
-  }
+  // Jump to the highest threshold crossed (and not yet sent).
+  // For cron: only steps where days >= threshold are eligible.
+  // For manual/force: all remaining steps are eligible (skip the "not due yet" gate),
+  // but still pick the highest crossed threshold so a patient 212 days out gets SMS 4,
+  // not SMS 1.
+  const eligible = force
+    ? steps.filter((_s, i) => i >= maxSentSeq)
+    : steps.filter((s, i) => i >= maxSentSeq && days >= s.day);
+
+  // Among eligible, prefer the highest crossed threshold; fall back to next step for force.
+  const crossed = eligible.filter((s) => days >= s.day);
+  const nextStep = crossed.length > 0 ? crossed[crossed.length - 1] : (force ? eligible[0] : null);
+  if (!nextStep) return null;
+  return { sequenceNumber: steps.indexOf(nextStep) + 1, daysThreshold: nextStep.day };
 }
 
 export function calculatePatientReminderStatus(
@@ -95,6 +97,10 @@ export function calculatePatientReminderStatus(
     (b) => b.patient_id === patient.id && !b.cancelled && isFutureBooking(b.booking_at)
   );
   if (hasFutureBooking) return "Future booking";
+  const hasPendingDelivery = logsInCurrentCycle(patient.id, logs).some(
+    (log) => log.status === "pending" || log.status === "unknown"
+  );
+  if (hasPendingDelivery) return "Delivery pending";
   if (
     reviewItems.some(
       (item) =>
@@ -188,7 +194,7 @@ export function calculateDryRunSummary(
     if (status === "Missing phone") counts.excluded_missing_phone += 1;
     if (status === "Future booking") counts.excluded_future_booking += 1;
     if (status === "Do not contact") counts.excluded_do_not_contact += 1;
-    if (status === "Needs review") counts.needs_review += 1;
+    if (status === "Needs review" || status === "Delivery pending") counts.needs_review += 1;
   }
 
   counts.would_send_today = Math.min(counts.eligible_count, settings.max_per_day);

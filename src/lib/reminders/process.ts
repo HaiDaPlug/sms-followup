@@ -6,8 +6,10 @@ import {
   getSettings,
   insertDailySnapshot,
   nowIso,
-  readStore
+  readStore,
+  updateReminderLog
 } from "@/lib/data/repository";
+import { supabase } from "@/lib/supabase/client";
 import { sendSms } from "@/lib/sms/provider";
 import {
   calculatePatientReminderStatus,
@@ -30,10 +32,51 @@ function toSkipReason(status: string): SkipReason {
     case "Missing phone":     return "missing_phone";
     case "Do not contact":    return "do_not_contact";
     case "Needs review":      return "needs_review";
+    case "Delivery pending":  return "delivery_pending";
     case "No valid booking":  return "no_valid_booking";
     case "Waiting":           return "waiting";
     case "Sent":              return "sequence_complete";
     default:                  return "no_valid_booking";
+  }
+}
+
+async function addDuplicateReservationLog(
+  patient: Patient,
+  bookingId: string | null
+): Promise<ReminderLog> {
+  return addReminderLog({
+    patient_id: patient.id,
+    booking_id: bookingId,
+    phone: patient.normalized_phone,
+    message: "",
+    status: "skipped",
+    sequence_number: null,
+    is_cycle_reset: false,
+    provider_message_id: null,
+    skip_reason: "sequence_complete",
+    error: "Redan reserverad av parallell förfrågan",
+    sent_at: null,
+  });
+}
+
+async function reconcileStalePendingDeliveries(): Promise<void> {
+  const staleThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const { data: staleRows, error: staleError } = await supabase
+    .from("reminder_logs")
+    .select("id")
+    .eq("status", "pending")
+    .lt("created_at", staleThreshold);
+
+  if (staleError) {
+    throw new Error(`Stale-pending query failed: ${staleError.message}`);
+  }
+  if (!staleRows || staleRows.length === 0) return;
+
+  const { error } = await supabase.rpc("mark_pending_unknown", {
+    p_log_ids: staleRows.map((row) => row.id),
+  });
+  if (error) {
+    throw new Error(`mark_pending_unknown failed: ${error.message}`);
   }
 }
 
@@ -68,6 +111,7 @@ export async function sendReminderToPatient(
     "Missing phone",
     "Future booking",
     "Needs review",
+    "Delivery pending",
     "No valid booking",
   ] as const;
 
@@ -146,6 +190,7 @@ export async function sendReminderToPatient(
         phone: patient.normalized_phone,
         sequence_number: next.sequenceNumber,
         rendered_message: message,
+        booking_id: latest?.id ?? null,
       },
     });
     return addReminderLog({
@@ -164,35 +209,67 @@ export async function sendReminderToPatient(
   }
 
   if (settings.dry_run_mode || forceDryRun) {
-    return addReminderLog({
+    const bookingId = latest?.id ?? null;
+    const { data, error } = await supabase
+      .from("reminder_logs")
+      .insert({
+        patient_id: patient.id,
+        booking_id: bookingId,
+        phone: patient.normalized_phone,
+        message,
+        status: "dry_run",
+        sequence_number: next.sequenceNumber,
+        is_cycle_reset: false,
+        provider_message_id: null,
+        skip_reason: null,
+        error: null,
+        sent_at: null,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return addDuplicateReservationLog(patient, bookingId);
+      }
+      throw new Error(`Failed to write dry-run log: ${error.message}`);
+    }
+    return data as ReminderLog;
+  }
+
+  const bookingId = latest?.id ?? null;
+  const { data: reservation, error: reserveError } = await supabase
+    .from("reminder_logs")
+    .insert({
       patient_id: patient.id,
-      booking_id: latest?.id ?? null,
+      booking_id: bookingId,
       phone: patient.normalized_phone,
       message,
-      status: "dry_run",
+      status: "pending",
       sequence_number: next.sequenceNumber,
       is_cycle_reset: false,
       provider_message_id: null,
       skip_reason: null,
       error: null,
-      sent_at: null
-    });
+      sent_at: null,
+    })
+    .select()
+    .single();
+
+  if (reserveError) {
+    if (reserveError.code === "23505") {
+      return addDuplicateReservationLog(patient, bookingId);
+    }
+    throw new Error(`Failed to reserve log slot: ${reserveError.message}`);
   }
 
   const result = await sendSms({ to: patient.normalized_phone!, message });
-  const log = await addReminderLog({
-    patient_id: patient.id,
-    booking_id: latest?.id ?? null,
-    phone: patient.normalized_phone,
-    message,
+  const log = await updateReminderLog(reservation.id, {
     status: result.success ? "sent" : "failed",
-    sequence_number: next.sequenceNumber,
-    is_cycle_reset: false,
     provider_message_id: result.providerMessageId ?? null,
-    skip_reason: null,
     error: result.error ?? null,
-    sent_at: result.success ? nowIso() : null
-  });
+    sent_at: result.success ? nowIso() : null,
+  }, "pending");
 
   if (!result.success) {
     await addReviewItem({
@@ -207,6 +284,7 @@ export async function sendReminderToPatient(
         phone: patient.normalized_phone,
         sequence_number: next.sequenceNumber,
         rendered_message: message,
+        booking_id: bookingId,
       },
     });
   }
@@ -238,7 +316,7 @@ export function buildCohortCounts(store: ClinicStore) {
     else if (status === "Future booking")   counts.future_booking += 1;
     else if (status === "Missing phone")    counts.missing_phone += 1;
     else if (status === "Do not contact")   counts.do_not_contact += 1;
-    else if (status === "Needs review")     counts.needs_review += 1;
+    else if (status === "Needs review" || status === "Delivery pending") counts.needs_review += 1;
     else if (status === "No valid booking") counts.no_valid_booking += 1;
   }
 
@@ -246,6 +324,8 @@ export function buildCohortCounts(store: ClinicStore) {
 }
 
 export async function processDailyReminders() {
+  await reconcileStalePendingDeliveries();
+
   const settings = await getSettings();
 
   if (!settings.is_active) {

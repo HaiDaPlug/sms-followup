@@ -1,6 +1,7 @@
 import { ReviewActions } from "@/components/ReviewActions";
 import { FailedSmsActions } from "@/components/FailedSmsActions";
 import { BookingMatchActions } from "@/components/BookingMatchActions";
+import { DeliveryUnknownActions } from "@/components/DeliveryUnknownActions";
 import { readStore } from "@/lib/data/repository";
 import { formatDate } from "@/lib/patients/status";
 
@@ -90,6 +91,11 @@ export default async function ReviewPage() {
                       phone={String(item.raw_data.phone ?? "")}
                       sequenceNumber={typeof item.raw_data.sequence_number === "number" ? item.raw_data.sequence_number : null}
                       initialMessage={String(item.raw_data.rendered_message ?? "")}
+                    />
+                  ) : item.status === "open" && item.type === "delivery_unknown" ? (
+                    <DeliveryUnknownActions
+                      reviewId={item.id}
+                      reminderLogId={String(item.raw_data.reminder_log_id ?? "")}
                     />
                   ) : item.status === "open" ? (
                     <ReviewActions reviewId={item.id} />

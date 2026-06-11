@@ -1,6 +1,6 @@
-import { readStore, resetPatientCycle } from "@/lib/data/repository";
+import { readStore } from "@/lib/data/repository";
 import { normalizePhone } from "@/lib/import/normalizers";
-import { createSupabaseServer } from "@/lib/supabase/server";
+import { supabase } from "@/lib/supabase/client";
 
 interface BokaDirektCustomer {
   Id: string;
@@ -8,7 +8,7 @@ interface BokaDirektCustomer {
   PhoneNumber: string;
   FirstName: string;
   LastName: string;
-  EmailAdress: string; // BokaDirekt typo — "Adress" not "Address"
+  EmailAdress: string; // BokaDirekt typo: "Adress" not "Address"
   SocialSecurityNumber: string | null;
   NewCustomer: boolean;
 }
@@ -40,32 +40,48 @@ interface MatchResult {
   matchedOn: string;
 }
 
-function findPatientMatch(booking: BokaDirektPayload, store: Awaited<ReturnType<typeof readStore>>): MatchResult {
+function findPatientMatch(
+  booking: BokaDirektPayload,
+  store: Awaited<ReturnType<typeof readStore>>
+): MatchResult {
   const customer = booking.Customer;
   const phone = normalizePhone(customer.MobilePhoneNumber || customer.PhoneNumber);
   const email = customer.EmailAdress?.toLowerCase();
 
-  // Tier 1: BokaDirekt customer ID
   const byExternalId = store.patients.find(
-    (p) => p.bokadirekt_customer_id === customer.Id
+    (patient) => patient.bokadirekt_customer_id === customer.Id
   );
   if (byExternalId) {
-    return { patientId: byExternalId.id, tier: "bokadirekt_id", matchedOn: `BokaDirekt ID ${customer.Id}` };
+    return {
+      patientId: byExternalId.id,
+      tier: "bokadirekt_id",
+      matchedOn: `BokaDirekt ID ${customer.Id}`,
+    };
   }
 
-  // Tier 2: normalized phone
   if (phone) {
-    const byPhone = store.patients.find((p) => p.normalized_phone === phone);
+    const byPhone = store.patients.find(
+      (patient) => patient.normalized_phone === phone
+    );
     if (byPhone) {
-      return { patientId: byPhone.id, tier: "phone", matchedOn: `telefon ${phone}` };
+      return {
+        patientId: byPhone.id,
+        tier: "phone",
+        matchedOn: `telefon ${phone}`,
+      };
     }
   }
 
-  // Tier 3: email
   if (email) {
-    const byEmail = store.patients.find((p) => p.email?.toLowerCase() === email);
+    const byEmail = store.patients.find(
+      (patient) => patient.email?.toLowerCase() === email
+    );
     if (byEmail) {
-      return { patientId: byEmail.id, tier: "email", matchedOn: `e-post ${customer.EmailAdress}` };
+      return {
+        patientId: byEmail.id,
+        tier: "email",
+        matchedOn: `e-post ${customer.EmailAdress}`,
+      };
     }
   }
 
@@ -95,32 +111,30 @@ export async function handleBokaDirektWebhook(
 }
 
 async function stageForReview(booking: BokaDirektPayload, eventType: string) {
-  const supabase = await createSupabaseServer();
   const store = await readStore();
   const match = findPatientMatch(booking, store);
   const customer = booking.Customer;
-
   const matchedPatient = match.patientId
-    ? store.patients.find((p) => p.id === match.patientId)
+    ? store.patients.find((patient) => patient.id === match.patientId)
     : null;
 
   const tierLabel: Record<MatchTier, string> = {
     bokadirekt_id: "Exakt (BokaDirekt-ID)",
-    phone:         "Exakt (telefon)",
-    email:         "Exakt (e-post)",
-    none:          "Ingen matchning",
+    phone: "Exakt (telefon)",
+    email: "Exakt (e-post)",
+    none: "Ingen matchning",
   };
 
   const reviewItem = {
     type: "pending_booking_match",
     severity: match.patientId ? "low" : "medium",
     title: match.patientId
-      ? `Ny bokning — ${customer.FirstName} ${customer.LastName} matchar ${matchedPatient?.full_name}`
-      : `Ny bokning — ${customer.FirstName} ${customer.LastName} — ingen befintlig patient`,
+      ? `Ny bokning - ${customer.FirstName} ${customer.LastName} matchar ${matchedPatient?.full_name}`
+      : `Ny bokning - ${customer.FirstName} ${customer.LastName} - ingen befintlig patient`,
     description: [
       `Inkommande: ${customer.FirstName} ${customer.LastName}, ${customer.MobilePhoneNumber || customer.PhoneNumber}, ${customer.EmailAdress}`,
       `Tjänst: ${booking.ServiceName} hos ${booking.PersonName} den ${new Date(booking.BookingStartDate).toLocaleDateString("sv-SE")}`,
-      `Matchning: ${tierLabel[match.tier]} — ${match.matchedOn}`,
+      `Matchning: ${tierLabel[match.tier]} - ${match.matchedOn}`,
     ].join(" · "),
     suggested_action: match.patientId
       ? "Bekräfta matchning för att återstarta SMS-sekvensen från dag 0."
@@ -136,165 +150,133 @@ async function stageForReview(booking: BokaDirektPayload, eventType: string) {
   };
 
   const { error } = await supabase.from("review_items").insert(reviewItem);
-  // 23505 = unique violation → exact same event already staged, idempotent
-  if (error && (error as { code?: string }).code !== "23505") throw error;
+  if (error && error.code !== "23505") {
+    throw new Error(`Failed to stage booking review: ${error.message}`);
+  }
 
-  return { ok: true, staged: true, matchTier: match.tier, matchedPatientId: match.patientId };
+  return {
+    ok: true,
+    staged: true,
+    matchTier: match.tier,
+    matchedPatientId: match.patientId,
+  };
 }
 
 export async function confirmBookingMatch(
   reviewItemId: string,
-  patientId: string | null // null = create new patient
+  patientId: string | null
 ) {
-  const supabase = await createSupabaseServer();
-
-  // Load the review item to get the booking payload
-  const { data: item } = await supabase
+  const { data: item, error: itemError } = await supabase
     .from("review_items")
     .select("raw_data")
     .eq("id", reviewItemId)
     .single();
 
-  if (!item) throw new Error("Review item not found");
+  if (itemError || !item) {
+    throw new Error(`Review item not found: ${itemError?.message ?? reviewItemId}`);
+  }
 
   const booking = (item.raw_data as Record<string, unknown>).booking as BokaDirektPayload;
+  if (!booking?.Customer || !booking.Id) {
+    throw new Error("Review item does not contain a valid booking payload");
+  }
+
   const customer = booking.Customer;
   const rawPhone = customer.MobilePhoneNumber || customer.PhoneNumber;
   const phone = normalizePhone(rawPhone);
   const fullName = `${customer.FirstName} ${customer.LastName}`.trim();
 
-  let resolvedPatientId = patientId;
+  const { data: resolvedPatientId, error: rpcError } = await supabase.rpc(
+    "confirm_booking_match",
+    {
+      p_review_item_id: reviewItemId,
+      p_patient_id: patientId,
+      p_bokadirekt_customer_id: customer.Id,
+      p_full_name: fullName,
+      p_first_name: customer.FirstName,
+      p_last_name: customer.LastName,
+      p_phone: rawPhone,
+      p_normalized_phone: phone,
+      p_email: customer.EmailAdress,
+      p_booking_id_external: booking.Id,
+      p_booking_at: booking.BookingStartDate,
+      p_service_name: booking.ServiceName,
+      p_practitioner_name: booking.PersonName,
+      p_location_name: booking.LocationName,
+      p_price: booking.BookingPrice,
+      p_booked_online: booking.BookedOnline,
+      p_event_created_at: booking.EventCreated,
+      p_raw_data: booking,
+    }
+  );
 
-  if (!resolvedPatientId) {
-    // Create new patient
-    const { data: newPatient, error } = await supabase
-      .from("patients")
-      .insert({
-        bokadirekt_customer_id: customer.Id,
-        full_name: fullName,
-        first_name: customer.FirstName,
-        last_name: customer.LastName,
-        phone: rawPhone,
-        normalized_phone: phone,
-        email: customer.EmailAdress,
-        source: "bokadirekt_webhook",
-      })
-      .select("id")
-      .single();
-
-    if (error || !newPatient) throw new Error(`Failed to create patient: ${error?.message}`);
-    resolvedPatientId = newPatient.id;
-  } else {
-    // Update existing patient with BokaDirekt customer ID and latest contact info
-    await supabase
-      .from("patients")
-      .update({
-        bokadirekt_customer_id: customer.Id,
-        first_name: customer.FirstName,
-        last_name: customer.LastName,
-        phone: rawPhone,
-        normalized_phone: phone,
-        email: customer.EmailAdress,
-      })
-      .eq("id", resolvedPatientId);
+  if (rpcError) {
+    throw new Error(`Booking confirmation failed: ${rpcError.message}`);
   }
-
-  // TypeScript narrowing: resolvedPatientId is guaranteed non-null here
-  if (!resolvedPatientId) throw new Error("Could not resolve patient ID");
-
-  // Upsert the booking record
-  const { data: upsertedBooking } = await supabase
-    .from("bookings")
-    .upsert(
-      {
-        bokadirekt_booking_id: booking.Id,
-        patient_id: resolvedPatientId,
-        patient_name: fullName,
-        phone: rawPhone,
-        normalized_phone: phone,
-        email: customer.EmailAdress,
-        booking_at: booking.BookingStartDate,
-        treatment: booking.ServiceName,
-        service_name: booking.ServiceName,
-        practitioner_name: booking.PersonName,
-        booking_date: booking.BookingStartDate,
-        location_name: booking.LocationName,
-        price: booking.BookingPrice,
-        booked_online: booking.BookedOnline,
-        cancelled: false,
-        event_created_at: booking.EventCreated,
-        source: "bokadirekt_webhook",
-        raw_data: booking,
-      },
-      { onConflict: "bokadirekt_booking_id", ignoreDuplicates: false }
-    )
-    .select("id")
-    .single();
-
-  // Update last_booking_at so eligibility calculation sees the new booking immediately
-  await supabase
-    .from("patients")
-    .update({ last_booking_at: booking.BookingStartDate })
-    .eq("id", resolvedPatientId);
-
-  // Reset SMS cycle — writes is_cycle_reset log, sequence restarts from step 1
-  await resetPatientCycle(resolvedPatientId, upsertedBooking?.id ?? null);
-
-  // Mark review item resolved
-  await supabase
-    .from("review_items")
-    .update({ status: "resolved" })
-    .eq("id", reviewItemId);
+  if (typeof resolvedPatientId !== "string") {
+    throw new Error("Booking confirmation did not return a patient ID");
+  }
 
   return { ok: true, patientId: resolvedPatientId };
 }
 
 async function handleCancellation(booking: BokaDirektPayload) {
-  const supabase = await createSupabaseServer();
-
-  // Close any open pending review item for this booking
-  await supabase
-    .from("review_items")
-    .update({ status: "resolved" })
-    .eq("type", "pending_booking_match")
-    .eq("status", "open")
-    .filter("raw_data->booking->>Id", "eq", booking.Id);
-
-  // Look up the booking so we can undo cycle effects
-  const { data: existingBooking } = await supabase
+  const { data: existingBooking, error: lookupError } = await supabase
     .from("bookings")
     .select("id, patient_id")
     .eq("bokadirekt_booking_id", booking.Id)
-    .single();
+    .maybeSingle();
+  if (lookupError) {
+    throw new Error(`Failed to look up cancelled booking: ${lookupError.message}`);
+  }
 
-  // Mark booking cancelled
-  await supabase
+  const { error: cancelError } = await supabase
     .from("bookings")
     .update({ cancelled: true })
     .eq("bokadirekt_booking_id", booking.Id);
+  if (cancelError) {
+    throw new Error(`Failed to cancel booking: ${cancelError.message}`);
+  }
 
   if (existingBooking?.patient_id) {
-    // Remove any cycle_reset log tied to this booking (undo the reset)
-    await supabase
+    const { error: resetError } = await supabase
       .from("reminder_logs")
       .delete()
       .eq("booking_id", existingBooking.id)
       .eq("is_cycle_reset", true);
+    if (resetError) {
+      throw new Error(`Failed to remove cycle reset: ${resetError.message}`);
+    }
 
-    // Recalculate last_booking_at from remaining non-cancelled bookings
-    const { data: remaining } = await supabase
+    const { data: remaining, error: remainingError } = await supabase
       .from("bookings")
       .select("booking_at")
       .eq("patient_id", existingBooking.patient_id)
       .eq("cancelled", false)
       .order("booking_at", { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
+    if (remainingError) {
+      throw new Error(`Failed to find remaining bookings: ${remainingError.message}`);
+    }
 
-    await supabase
+    const { error: patientError } = await supabase
       .from("patients")
       .update({ last_booking_at: remaining?.booking_at ?? null })
       .eq("id", existingBooking.patient_id);
+    if (patientError) {
+      throw new Error(`Failed to update patient booking date: ${patientError.message}`);
+    }
+  }
+
+  const { error: reviewError } = await supabase
+    .from("review_items")
+    .update({ status: "resolved", updated_at: new Date().toISOString() })
+    .eq("type", "pending_booking_match")
+    .eq("status", "open")
+    .filter("raw_data->booking->>Id", "eq", booking.Id);
+  if (reviewError) {
+    throw new Error(`Failed to close booking review: ${reviewError.message}`);
   }
 
   return { ok: true, cancelled: true, bookingId: booking.Id };

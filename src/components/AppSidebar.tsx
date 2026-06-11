@@ -2,7 +2,8 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { LogoutButton } from "@/components/LogoutButton";
 
 const navItems = [
@@ -91,6 +92,30 @@ const navItems = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  useEffect(() => {
+    console.log("[AppSidebar] keyboard shortcut listener mounted");
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const idx = parseInt(e.key, 10);
+      console.log("[AppSidebar] keydown", { key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, idx });
+      if (isNaN(idx) || idx < 1 || idx > navItems.length) {
+        console.log("[AppSidebar] key out of range, ignoring");
+        return;
+      }
+      const target = navItems[idx - 1];
+      if (!target) return;
+      console.log("[AppSidebar] navigating to", target.href);
+      e.preventDefault();
+      router.push(target.href);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      console.log("[AppSidebar] keyboard shortcut listener unmounted");
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [router]);
 
   return (
     <aside className="sidebar">
@@ -98,14 +123,15 @@ export function AppSidebar() {
         <Image src="/osteopaticentrum.svg" alt="Osteopaticentrum" width={160} height={40} style={{ width: "100%", height: "auto" }} priority />
       </Link>
       <nav className="nav" aria-label="Huvudnavigation">
-        {navItems.map((item) => (
+        {navItems.map((item, i) => (
           <Link
             className={pathname.startsWith(item.href) ? "active" : undefined}
             href={item.href}
             key={item.href}
           >
             {item.icon}
-            {item.label}
+            <span className="nav-label">{item.label}</span>
+            <span className="nav-shortcut">{i + 1}</span>
           </Link>
         ))}
       </nav>
