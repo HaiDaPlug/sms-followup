@@ -15,6 +15,7 @@ export function LogoutButton() {
 
   return (
     <button
+      className="ghost"
       onClick={handleLogout}
       style={{
         display: "flex",

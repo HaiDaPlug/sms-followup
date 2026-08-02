@@ -54,7 +54,7 @@ export function AddPatientButton() {
 
   return (
     <>
-      <button onClick={() => setOpen(true)} className="pt-add-btn">
+      <button onClick={() => setOpen(true)} className="pt-add-btn sweep-btn">
         <span>+ Lägg till patient</span>
       </button>
 

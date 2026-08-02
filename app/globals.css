@@ -38,6 +38,26 @@
   --radius-lg:   12px;
   --ease:        cubic-bezier(0.22, 1, 0.36, 1);
 
+  --shadow-card: 0 1px 2px rgba(13, 31, 26, 0.05);
+  --shadow-btn:  inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 1px 2px rgba(7, 59, 44, 0.25);
+  --shadow-btn-hover: inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 2px 6px rgba(7, 59, 44, 0.22);
+
+  /* Button sheen. --sheen-overlay rides in the button ::after (overlay-blended
+     together with the grain), so every button keeps it even when component CSS
+     overrides `background:`. --btn-sheen is the plain-alpha fallback for
+     elements that can't carry a ::after (selects, active nav pills). */
+  --sheen-overlay: linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.10) 45%, rgba(0,0,0,0.50) 100%);
+  --btn-sheen: linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.02) 45%, rgba(0,0,0,0.10) 100%);
+
+  /* Sweep fill — hover fill that sweeps in from the left (see .sweep-btn).
+     One duration token controls every sweep in the app; --sweep-fill is the
+     default mint, override it per component class for other colors. */
+  --sweep-duration: 0.8s;
+  --sweep-fill: linear-gradient(180deg, #65c8be 0%, #5bbfb5 45%, #4fb0a6 100%);
+
+  /* Monochrome film grain — SVG fractal noise, tiled */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+
   --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-head: 'Merriweather', Georgia, serif;
 }
@@ -71,12 +91,26 @@ button, input, select, textarea { font: inherit; }
   position: sticky;
   top: 0;
   height: 100vh;
-  background: var(--sidebar-bg);
+  background: linear-gradient(178deg, #094433 0%, var(--sidebar-bg) 42%, #052e23 100%);
   border-right: none;
   padding: 20px 12px 20px;
   display: flex;
   flex-direction: column;
 }
+
+.sidebar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--grain);
+  background-size: 160px 160px;
+  mix-blend-mode: overlay;
+  opacity: 0.28;
+  pointer-events: none;
+}
+
+/* Keep nav content interactive above the grain layer */
+.sidebar > * { position: relative; z-index: 1; }
 
 .brand {
   display: flex;
@@ -145,6 +179,7 @@ button, input, select, textarea { font: inherit; }
   background: var(--sidebar-active-bg);
   font-weight: 600;
   border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 3px rgba(0,0,0,0.12);
 }
 
 .nav-icon {
@@ -177,6 +212,28 @@ button, input, select, textarea { font: inherit; }
 .nav a:hover .nav-shortcut { opacity: 0.55; }
 .nav a.active .nav-shortcut { opacity: 0.4; }
 
+.nav-shortcut.pending {
+  opacity: 1;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+}
+
+.nav-pending-spinner {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid rgba(255,255,255,0.28);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: nav-pending-spin 650ms linear infinite;
+}
+
+@keyframes nav-pending-spin {
+  to { transform: rotate(360deg); }
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding: 14px 6px 0;
@@ -190,6 +247,112 @@ button, input, select, textarea { font: inherit; }
 .main {
   padding: 36px 40px;
   min-width: 0;
+}
+
+/* Route transition skeleton: mirrors the app's quiet, information-dense panels. */
+.route-loading {
+  width: min(1020px, 100%);
+  animation: route-loading-enter 180ms var(--ease) both;
+}
+
+.route-loading-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.route-loading-heading {
+  display: grid;
+  gap: 9px;
+  margin-bottom: 30px;
+}
+
+.route-skeleton {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e7ecea;
+}
+
+.route-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-105%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.78), transparent);
+  animation: route-loading-shimmer 1.25s ease-in-out infinite;
+}
+
+.route-skeleton-kicker { width: 92px; height: 9px; }
+.route-skeleton-title { width: 210px; height: 27px; border-radius: 7px; }
+.route-skeleton-subtitle { width: min(430px, 72%); height: 11px; }
+
+.route-loading-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.route-loading-metric {
+  display: grid;
+  gap: 12px;
+  padding: 22px 24px;
+  border-right: 1px solid var(--border);
+}
+
+.route-loading-metric:last-child { border-right: 0; }
+.route-skeleton-label { width: 70%; height: 9px; }
+.route-skeleton-value { width: 42px; height: 28px; border-radius: 7px; }
+
+.route-loading-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.route-loading-panel {
+  padding: 18px 20px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.route-skeleton-panel-title { width: 104px; height: 9px; margin-bottom: 18px; }
+
+.route-loading-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  border-top: 1px solid var(--border);
+}
+
+.route-skeleton-dot { width: 8px; height: 8px; flex: 0 0 auto; }
+.route-skeleton-line { width: 68%; height: 10px; }
+.route-skeleton-line.medium { width: 52%; }
+.route-skeleton-line.short { width: 36%; }
+.route-skeleton-chip { width: 48px; height: 18px; margin-left: auto; }
+.route-skeleton-block { height: 74px; margin: 12px 0; border-radius: var(--radius-sm); }
+.route-skeleton-block.short { width: 78%; height: 52px; }
+
+@keyframes route-loading-shimmer {
+  55%, 100% { transform: translateX(105%); }
+}
+
+@keyframes route-loading-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* ─── Page header ────────────────────────────────────────────────────────── */
@@ -221,11 +384,46 @@ button, input, select, textarea { font: inherit; }
 .grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
+.analytics-bottom-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+.analytics-bottom-grid > * { min-width: 0; }
+
+.an-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.an-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.an-stats > div {
+  padding: 18px 24px;
+  border-right: 1px solid var(--border);
+}
+
+.an-stats > div:last-child { border-right: none; }
+
+@media (max-width: 600px) {
+  .an-stats { grid-template-columns: 1fr; }
+  .an-stats > div { border-right: none; border-bottom: 1px solid var(--border); }
+  .an-stats > div:last-child { border-bottom: none; }
+}
+
 /* ─── Cards ──────────────────────────────────────────────────────────────── */
 .card, .table-wrap, .form-panel {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
 }
 
 .card { padding: 20px; }
@@ -364,9 +562,10 @@ tbody tr:hover { background: var(--surface-sub); }
 /* ─── Buttons ────────────────────────────────────────────────────────────── */
 .button, button {
   align-items: center;
-  background: var(--sidebar-bg);
+  background-color: var(--sidebar-bg);
   border: 0;
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-btn);
   color: #fff;
   cursor: pointer;
   display: inline-flex;
@@ -375,38 +574,113 @@ tbody tr:hover { background: var(--surface-sub); }
   gap: 6px;
   min-height: 34px;
   padding: 7px 14px;
-  transition: background 140ms var(--ease);
+  position: relative;
+  transition: background 140ms var(--ease), box-shadow 140ms var(--ease), transform 140ms var(--ease);
   white-space: nowrap;
 }
 
-.button:hover, button:hover { background: #0a5040; }
+/* Grain + sheen on every button surface. Lives in ::after so it applies
+   globally, regardless of what background the component sets. */
+.button::after, button::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image: var(--sheen-overlay), var(--grain);
+  background-size: 100% 100%, 160px 160px;
+  mix-blend-mode: overlay;
+  opacity: 0.22;
+  pointer-events: none;
+}
+
+.button:hover, button:hover {
+  background-color: #0a5040;
+  box-shadow: var(--shadow-btn-hover);
+}
+
+.button:active, button:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.button:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .button.secondary, button.secondary {
-  background: var(--surface-sub);
+  background-color: var(--surface-sub);
   color: var(--text);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
 }
 
-.button.secondary:hover, button.secondary:hover { background: var(--border); }
+.button.secondary::after, button.secondary::after { opacity: 0.12; }
+
+.button.secondary:hover, button.secondary:hover {
+  background-color: var(--border);
+  box-shadow: var(--shadow-card);
+}
 
 .button.danger, button.danger {
-  background: var(--red-bg);
+  background-color: var(--red-bg);
   color: var(--red);
   border: 1px solid var(--red-border);
+  box-shadow: var(--shadow-card);
 }
 
-.button.danger:hover, button.danger:hover { background: var(--red-border); }
+.button.danger::after, button.danger::after { opacity: 0.12; }
+
+.button.danger:hover, button.danger:hover {
+  background-color: var(--red-border);
+  box-shadow: var(--shadow-card);
+}
+
+/* Ghost buttons (transparent chrome, e.g. sidebar logout) — no surface treatment.
+   Buttons that set their own inline background are custom-styled: opt them out too. */
+.button.ghost, button.ghost,
+button[style*="background"] {
+  box-shadow: none;
+}
+.button.ghost, button.ghost { background: transparent; }
+.button.ghost::after, button.ghost::after,
+button[style*="background"]::after { content: none; }
+.button.ghost:hover, button.ghost:hover,
+button[style*="background"]:hover { box-shadow: none; }
 
 button:disabled {
   cursor: wait;
   opacity: 0.45;
   pointer-events: none;
+  box-shadow: none;
+  transform: none;
 }
 
-.pt-add-btn {
+/* ─── Sweep fill ─────────────────────────────────────────────────────────
+   Add .sweep-btn to a button or link and wrap its label in an element
+   (e.g. <span>) so the text paints above the fill. The fill sweeps in from
+   the left on hover. Override --sweep-fill on the component class to change
+   the color; disable per state with `.foo::before { display: none; }`. */
+.sweep-btn {
   position: relative;
   overflow: hidden;
-  background: #073B2C;
+  isolation: isolate;
+}
+.sweep-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--sweep-fill);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform var(--sweep-duration) var(--ease);
+  z-index: 0;
+}
+.sweep-btn:not([disabled]):hover::before { transform: scaleX(1); }
+.sweep-btn > * { position: relative; z-index: 1; }
+
+.pt-add-btn {
+  background-color: #073B2C;
   color: #fff !important;
   border: none !important;
   border-radius: var(--radius-sm);
@@ -417,26 +691,49 @@ button:disabled {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  isolation: isolate;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   transition: none;
   flex-shrink: 0;
 }
-.pt-add-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: #5bbfb5;
-  transform-origin: left center;
-  transform: scaleX(0);
-  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-  z-index: 0;
+.pt-add-btn:hover { background-color: #073B2C !important; }
+
+/* ─── Segmented control ──────────────────────────────────────────────────── */
+.seg {
+  display: inline-flex;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
 }
-.pt-add-btn:hover { background: #073B2C !important; }
-.pt-add-btn:hover::before { transform: scaleX(1); }
-.pt-add-btn > span { position: relative; z-index: 1; }
+
+.seg button {
+  background: none;
+  box-shadow: none;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 7px 14px;
+  min-height: unset;
+  transition: background 150ms, color 150ms;
+}
+
+.seg button::after { content: none; }
+.seg button:last-child { border-right: none; }
+.seg button:hover:not(.active) { color: #073B2C; }
+
+.seg button.active {
+  background-color: #073B2C;
+  background-image: var(--btn-sheen);
+  color: #fff;
+}
+
+.seg button:disabled { cursor: wait; opacity: 0.5; pointer-events: none; }
 
 /* ─── Filters ────────────────────────────────────────────────────────────── */
 .filters {
@@ -460,10 +757,12 @@ button:disabled {
 .filters a:hover { background: var(--surface-sub); color: var(--text); }
 
 .filters a.active {
-  background: var(--accent);
+  background-color: var(--accent);
+  background-image: var(--btn-sheen);
   border-color: var(--accent);
   color: #fff;
   font-weight: 600;
+  box-shadow: 0 1px 3px rgba(61, 168, 157, 0.35);
 }
 
 /* ─── Forms ──────────────────────────────────────────────────────────────── */
@@ -575,7 +874,7 @@ button:disabled {
 
   .sidebar {
     height: auto;
-    position: static;
+    position: relative;
     flex-direction: row;
     align-items: center;
     padding: 12px 16px;
@@ -587,9 +886,24 @@ button:disabled {
   .sidebar-footer { display: none; }
 
   .grid.cols-4, .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .analytics-bottom-grid { grid-template-columns: 1fr; }
   .main { padding: 20px; }
+  .route-loading-metrics { grid-template-columns: repeat(2, 1fr); }
+  .route-loading-metric:nth-child(2) { border-right: 0; }
+  .route-loading-metric:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+  .route-loading-columns { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 600px) {
   .grid.cols-4, .grid.cols-2 { grid-template-columns: 1fr; }
+  .route-loading-metrics { grid-template-columns: 1fr; }
+  .route-loading-metric { border-right: 0; border-bottom: 1px solid var(--border); }
+  .route-loading-metric:last-child { border-bottom: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

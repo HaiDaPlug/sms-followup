@@ -6,7 +6,7 @@ import type { ImportSummary } from "@/types/clinic";
 const summaryLabels: Record<string, string> = {
   totalRows: "Totalt rader",
   importedBookings: "Importerade bokningar",
-  importedOrUpdatedPatients: "Patienter (nya/uppdaterade)",
+  importedOrUpdatedPatients: "Kunder (nya/uppdaterade)",
   skippedRows: "Hoppade rader",
   missingPhoneCount: "Saknar telefon",
   cancelledCount: "Avbokade",

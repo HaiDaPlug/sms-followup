@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { LogoutButton } from "@/components/LogoutButton";
@@ -21,11 +21,22 @@ const navItems = [
   },
   {
     href: "/app/patients",
-    label: "Patienter",
+    label: "Kunder",
     icon: (
       <svg className="nav-icon" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={1.75}>
         <circle cx="8" cy="5" r="3" />
         <path d="M2 14c0-3.314 2.686-5 6-5s6 1.686 6 5" strokeLinecap="round" />
+      </svg>
+    )
+  },
+  {
+    href: "/app/scheduled-sms",
+    label: "Schemalagda SMS",
+    icon: (
+      <svg className="nav-icon" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={1.75}>
+        <rect x="2" y="3" width="12" height="11" rx="1.5" />
+        <path d="M2 6.5h12" />
+        <path d="M5 2v2M11 2v2" strokeLinecap="round" />
       </svg>
     )
   },
@@ -90,6 +101,20 @@ const navItems = [
   }
 ];
 
+function NavItemContent({ item, shortcut }: { item: (typeof navItems)[number]; shortcut: number }) {
+  const { pending } = useLinkStatus();
+
+  return (
+    <>
+      {item.icon}
+      <span className="nav-label">{item.label}</span>
+      <span className={`nav-shortcut${pending ? " pending" : ""}`} aria-hidden="true">
+        {pending ? <span className="nav-pending-spinner" /> : shortcut}
+      </span>
+    </>
+  );
+}
+
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -129,9 +154,7 @@ export function AppSidebar() {
             href={item.href}
             key={item.href}
           >
-            {item.icon}
-            <span className="nav-label">{item.label}</span>
-            <span className="nav-shortcut">{i + 1}</span>
+            <NavItemContent item={item} shortcut={i + 1} />
           </Link>
         ))}
       </nav>

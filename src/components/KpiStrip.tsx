@@ -54,7 +54,7 @@ const globalStyles = `
 .send-btn {
   position: relative;
   overflow: hidden;
-  background: #073B2C;
+  background-color: #073B2C;
   color: #fff;
   border: none;
   border-radius: 5px;
@@ -71,19 +71,6 @@ const globalStyles = `
   text-align: center;
   justify-content: center;
 }
-.send-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: #5bbfb5;
-  transform-origin: left center;
-  transform: scaleX(0);
-  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-  z-index: 0;
-}
-.send-btn:not([disabled]):hover::before { transform: scaleX(1); }
-.send-btn > * { position: relative; z-index: 1; }
-
 .send-btn.sent {
   background: var(--surface-sub);
   color: var(--text-muted);
@@ -182,7 +169,7 @@ function SendButton({ patientId, onSent }: { patientId: string; onSent: () => vo
     : "Skicka SMS";
 
   return (
-    <button onClick={handleSend} className={`send-btn ${state !== "idle" ? state : ""}`}>
+    <button onClick={handleSend} className={`send-btn sweep-btn ${state !== "idle" ? state : ""}`}>
       <AnimatePresence mode="wait" initial={false}>
         <motion.span
           key={state}

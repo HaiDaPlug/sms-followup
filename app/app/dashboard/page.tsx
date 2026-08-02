@@ -63,7 +63,7 @@ export default async function DashboardPage() {
 
       {/* ── KPI strip — 4 numbers separated by hairlines ── */}
       <KpiStrip items={[
-        { label: "Patienter totalt",    value: stats.totalPatients },
+        { label: "Kunder totalt",    value: stats.totalPatients },
         { label: "Redo för påminnelse", value: stats.readyForReminder, clickable: "ready" },
         { label: "SMS denna månad",     value: stats.smsSentThisMonth, clickable: "sms" },
         { label: "Inväntar granskning", value: stats.needsReviewCount, clickable: "review" },
