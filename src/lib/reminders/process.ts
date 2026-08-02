@@ -3,8 +3,12 @@ import {
   addReminderLog,
   addReviewItem,
   bulkUpsertPatients,
+  claimDueScheduledSms,
+  completeScheduledSms,
   getSettings,
   insertDailySnapshot,
+  getActiveScheduledSmsPatientIds,
+  linkScheduledSmsReservation,
   nowIso,
   readStore,
   updateReminderLog
@@ -92,7 +96,9 @@ export async function sendReminderToPatient(
   store: ClinicStore,
   forceDryRun = false,
   sequenceOverride?: number,
-  forceNext = false
+  forceNext = false,
+  frozenMessage?: string,
+  scheduledSmsId?: string
 ): Promise<ReminderLog> {
   const settings = store.reminder_settings[0];
   const status = calculatePatientReminderStatus(
@@ -174,7 +180,7 @@ export async function sendReminderToPatient(
     });
   };
   const template = templateForSequence(settings, next.sequenceNumber);
-  const message = renderSmsTemplate(template, patient, settings);
+  const message = frozenMessage ?? renderSmsTemplate(template, patient, settings);
 
   const unresolved = unresolvedPlaceholders(message);
   if (unresolved.length > 0) {
@@ -234,7 +240,9 @@ export async function sendReminderToPatient(
       }
       throw new Error(`Failed to write dry-run log: ${error.message}`);
     }
-    return data as ReminderLog;
+    const log = data as ReminderLog;
+    if (scheduledSmsId) await linkScheduledSmsReservation(scheduledSmsId, log.id);
+    return log;
   }
 
   const bookingId = latest?.id ?? null;
@@ -263,15 +271,35 @@ export async function sendReminderToPatient(
     throw new Error(`Failed to reserve log slot: ${reserveError.message}`);
   }
 
+  if (scheduledSmsId) await linkScheduledSmsReservation(scheduledSmsId, reservation.id);
   const result = await sendSms({ to: patient.normalized_phone!, message });
+  const deliveryStatus = result.success ? "sent" : result.uncertain ? "unknown" : "failed";
   const log = await updateReminderLog(reservation.id, {
-    status: result.success ? "sent" : "failed",
+    status: deliveryStatus,
     provider_message_id: result.providerMessageId ?? null,
     error: result.error ?? null,
     sent_at: result.success ? nowIso() : null,
   }, "pending");
 
-  if (!result.success) {
+  if (result.uncertain) {
+    await addReviewItem({
+      type: "delivery_unknown",
+      severity: "high",
+      title: `Okänd SMS-leverans — ${patient.full_name}`,
+      description: result.error ?? "Leverantörens svar kunde inte bekräftas.",
+      suggested_action: "Kontrollera leverantören innan meddelandet skickas igen.",
+      status: "open",
+      raw_data: {
+        reminder_log_id: reservation.id,
+        patient_id: patient.id,
+        phone: patient.normalized_phone,
+        sequence_number: next.sequenceNumber,
+        rendered_message: message,
+        booking_id: bookingId,
+      },
+      content_hash: `delivery_unknown:${reservation.id}`,
+    });
+  } else if (!result.success) {
     await addReviewItem({
       type: "failed_sms",
       severity: "high",
@@ -334,6 +362,7 @@ export async function processDailyReminders() {
 
   // Load everything once — no per-patient re-fetch
   const store = await readStore();
+  const activeScheduledPatientIds = await getActiveScheduledSmsPatientIds();
 
   // Refresh has_future_booking on all patients against live booking data.
   // The stored flag goes stale between imports; correcting it here ensures the
@@ -360,6 +389,7 @@ export async function processDailyReminders() {
   const eligible = store.patients
     .filter(
       (patient) =>
+        !activeScheduledPatientIds.has(patient.id) &&
         calculatePatientReminderStatus(
           patient, settings, store.bookings, store.reminder_logs, store.review_items
         ) === "Ready"
@@ -416,4 +446,68 @@ export async function processDailyReminders() {
   }
 
   return { processed: results.length, sent, dry_run: dryRun, failed, skipped, results };
+}
+
+export async function processScheduledSms() {
+  const claimed = await claimDueScheduledSms(25);
+  if (claimed.length === 0) {
+    return { processed: 0, sent: 0, failed: 0, unknown: 0, skipped: 0, dry_run: 0, results: [] };
+  }
+
+  const store = await readStore();
+  const results: { scheduledSmsId: string; patientId: string | null; status: string; error: string | null }[] = [];
+
+  for (const scheduled of claimed) {
+    try {
+      const patient = store.patients.find((candidate) => candidate.id === scheduled.patient_id);
+      if (!patient) {
+        const error = "Patienten hittades inte";
+        await completeScheduledSms(scheduled.id, "skipped", null, error);
+        results.push({ scheduledSmsId: scheduled.id, patientId: scheduled.patient_id, status: "skipped", error });
+        continue;
+      }
+
+      const log = await sendReminderToPatient(
+        patient,
+        store,
+        false,
+        scheduled.sequence_override ?? undefined,
+        true,
+        scheduled.message_override ?? undefined,
+        scheduled.id
+      );
+      store.reminder_logs.push(log);
+
+      const outcome =
+        log.status === "sent" || log.status === "delivered" ? "sent"
+        : log.status === "dry_run" ? "dry_run"
+        : log.status === "unknown" ? "unknown"
+        : log.status === "skipped" ? "skipped"
+        : "failed";
+
+      await completeScheduledSms(scheduled.id, outcome, log.id, log.error ?? null);
+      results.push({ scheduledSmsId: scheduled.id, patientId: patient.id, status: outcome, error: log.error ?? null });
+    } catch (err) {
+      // Once claimed, an exception may have happened after the provider accepted
+      // the request. Unknown is safer than a retryable failure.
+      const error = err instanceof Error ? err.message : "Oväntat fel";
+      try {
+        await completeScheduledSms(scheduled.id, "unknown", null, error);
+      } catch {
+        // Preserve the original failure in the response if completion also fails.
+      }
+      results.push({ scheduledSmsId: scheduled.id, patientId: scheduled.patient_id, status: "unknown", error });
+    }
+  }
+
+  const count = (status: string) => results.filter((result) => result.status === status).length;
+  return {
+    processed: results.length,
+    sent: count("sent"),
+    failed: count("failed"),
+    unknown: count("unknown"),
+    skipped: count("skipped"),
+    dry_run: count("dry_run"),
+    results
+  };
 }

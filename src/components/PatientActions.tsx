@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ScheduleSmsDialog } from "./ScheduleSmsDialog";
 
 type SendState = "idle" | "sending" | "sent" | "failed";
 
@@ -31,18 +32,7 @@ const styles = `
   min-width: 100px;
   justify-content: center;
 }
-.pa-sms-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: #5bbfb5;
-  transform-origin: left center;
-  transform: scaleX(0);
-  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-  z-index: 0;
-}
-.pa-sms-btn:not([disabled]):hover::before { transform: scaleX(1); }
-.pa-sms-btn > span { position: relative; z-index: 1; display: flex; align-items: center; gap: 5px; }
+.pa-sms-btn > span { display: flex; align-items: center; gap: 5px; }
 
 .pa-sms-btn.pa-sending {
   background: #073B2C;
@@ -66,8 +56,7 @@ const styles = `
 .pa-sms-btn.pa-failed::before { display: none; }
 
 .pa-dnc-btn {
-  position: relative;
-  overflow: hidden;
+  --sweep-fill: linear-gradient(180deg, #b13a3a 0%, #a33030 45%, #932a2a 100%);
   background: transparent;
   color: #a33030;
   border: 1px solid #f0d0d0;
@@ -83,28 +72,16 @@ const styles = `
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  transition: background 0.22s ease, border-color 0.22s ease;
+  transition: color var(--sweep-duration) var(--ease), border-color 0.22s ease;
 }
-.pa-dnc-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: #a33030;
-  transform-origin: left center;
-  transform: scaleX(0);
-  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
-  z-index: 0;
-}
-.pa-dnc-btn:not([disabled]):hover::before { transform: scaleX(1); }
 .pa-dnc-btn:not([disabled]):hover { color: #fff; border-color: #a33030; }
-.pa-dnc-btn > span { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; }
+.pa-dnc-btn > span { display: flex; align-items: center; gap: 4px; }
 
 .pa-dnc-btn.pa-busy { opacity: 0.5; cursor: wait; }
 .pa-dnc-btn.pa-busy::before { display: none; }
 
 .pa-reactivate-btn {
-  position: relative;
-  overflow: hidden;
+  --sweep-fill: linear-gradient(180deg, #1f7a68 0%, #1a6b5a 45%, #165e4e 100%);
   background: transparent;
   color: #1a6b5a;
   border: 1px solid #b0dbd5;
@@ -120,27 +97,15 @@ const styles = `
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  transition: background 0.22s ease, border-color 0.22s ease;
+  transition: color var(--sweep-duration) var(--ease), border-color 0.22s ease;
 }
-.pa-reactivate-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: #1a6b5a;
-  transform-origin: left center;
-  transform: scaleX(0);
-  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
-  z-index: 0;
-}
-.pa-reactivate-btn:not([disabled]):hover::before { transform: scaleX(1); }
 .pa-reactivate-btn:not([disabled]):hover { color: #fff; border-color: #1a6b5a; }
-.pa-reactivate-btn > span { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; }
+.pa-reactivate-btn > span { display: flex; align-items: center; gap: 4px; }
 .pa-reactivate-btn.pa-busy { opacity: 0.5; cursor: wait; }
 .pa-reactivate-btn.pa-busy::before { display: none; }
 
 .pa-delete-btn {
-  position: relative;
-  overflow: hidden;
+  --sweep-fill: linear-gradient(180deg, #cb4737 0%, #c0392b 45%, #b23225 100%);
   background: transparent;
   color: #888;
   border: 1px solid #e0e0e0;
@@ -156,21 +121,10 @@ const styles = `
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  transition: background 0.22s ease, border-color 0.22s ease, color 0.22s ease;
+  transition: color var(--sweep-duration) var(--ease), border-color 0.22s ease;
 }
-.pa-delete-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: #c0392b;
-  transform-origin: left center;
-  transform: scaleX(0);
-  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
-  z-index: 0;
-}
-.pa-delete-btn:not([disabled]):hover::before { transform: scaleX(1); }
 .pa-delete-btn:not([disabled]):hover { color: #fff; border-color: #c0392b; }
-.pa-delete-btn > span { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; }
+.pa-delete-btn > span { display: flex; align-items: center; gap: 4px; }
 .pa-delete-btn.pa-busy { opacity: 0.5; cursor: wait; }
 .pa-delete-btn.pa-busy::before { display: none; }
 
@@ -183,7 +137,8 @@ const styles = `
   height: 32px;
   border: 1px solid #1a5a40;
   border-radius: 5px;
-  background: #073B2C;
+  background-color: #073B2C;
+  background-image: var(--btn-sheen);
   color: rgba(255,255,255,0.85);
   font-size: 12px;
   font-weight: 500;
@@ -194,9 +149,32 @@ const styles = `
   transition: border-color 0.2s, background 0.2s;
   max-width: 120px;
 }
-.pa-tpl-select:hover { background: #0a4f38; border-color: #5bbfb5; }
+.pa-tpl-select:hover { background-color: #0a4f38; border-color: #5bbfb5; }
 .pa-tpl-select:focus { border-color: #5bbfb5; }
 .pa-tpl-select option { background: #073B2C; color: #fff; }
+
+.pa-schedule-btn {
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+  color: #2f8377;
+  border: 1px solid #5bbfb5;
+  border-radius: 5px;
+  padding: 0 12px;
+  height: 32px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.22s ease, border-color 0.22s ease;
+}
+.pa-schedule-btn:not([disabled]):hover { color: #073B2C; border-color: #5bbfb5; }
+.pa-schedule-btn > span { display: flex; align-items: center; gap: 4px; }
 `;
 
 let injected = false;
@@ -223,6 +201,8 @@ export function PatientActions({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [isDnc, setIsDnc] = useState(doNotContact);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
 
   if (typeof document !== "undefined") injectStyles();
 
@@ -274,6 +254,12 @@ export function PatientActions({
     window.location.reload();
   }
 
+  function handleScheduled() {
+    setScheduleOpen(false);
+    setScheduleMessage("Schemalagt ✓");
+    setTimeout(() => setScheduleMessage(null), 4000);
+  }
+
   async function handleDelete() {
     if (deleteBusy) return;
     if (!window.confirm("Ta bort patienten permanent? Detta kan inte ångras.")) return;
@@ -289,7 +275,7 @@ export function PatientActions({
     : "Skicka SMS";
 
 
-  const smsClass = `pa-sms-btn${sendState !== "idle" ? ` pa-${sendState}` : ""}`;
+  const smsClass = `pa-sms-btn sweep-btn${sendState !== "idle" ? ` pa-${sendState}` : ""}`;
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -330,9 +316,31 @@ export function PatientActions({
         </span>
       )}
 
+      <button
+        className="pa-schedule-btn sweep-btn"
+        onClick={() => setScheduleOpen(true)}
+      >
+        <span>Schemalägg SMS</span>
+      </button>
+
+      {scheduleMessage && (
+        <span style={{ fontSize: 11.5, color: "#2f8377", fontWeight: 600 }}>
+          {scheduleMessage}
+        </span>
+      )}
+
+      {scheduleOpen && (
+        <ScheduleSmsDialog
+          patientId={patientId}
+          steps={steps}
+          onClose={() => setScheduleOpen(false)}
+          onScheduled={handleScheduled}
+        />
+      )}
+
       {isDnc ? (
         <button
-          className={`pa-reactivate-btn${dncBusy ? " pa-busy" : ""}`}
+          className={`pa-reactivate-btn sweep-btn${dncBusy ? " pa-busy" : ""}`}
           disabled={dncBusy}
           onClick={handleDnc}
         >
@@ -340,7 +348,7 @@ export function PatientActions({
         </button>
       ) : (
         <button
-          className={`pa-dnc-btn${dncBusy ? " pa-busy" : ""}`}
+          className={`pa-dnc-btn sweep-btn${dncBusy ? " pa-busy" : ""}`}
           disabled={dncBusy}
           onClick={handleDnc}
         >
@@ -349,7 +357,7 @@ export function PatientActions({
       )}
 
       <button
-        className={`pa-delete-btn${deleteBusy ? " pa-busy" : ""}`}
+        className={`pa-delete-btn sweep-btn${deleteBusy ? " pa-busy" : ""}`}
         disabled={deleteBusy}
         onClick={handleDelete}
       >

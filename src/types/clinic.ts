@@ -10,6 +10,15 @@ export type ReminderLogStatus =
   | "dry_run"
   | "skipped"
   | "cycle_reset";
+export type ScheduledSmsStatus =
+  | "pending"
+  | "processing"
+  | "sent"
+  | "cancelled"
+  | "skipped"
+  | "failed"
+  | "unknown"
+  | "dry_run";
 export type SkipReason =
   | "future_booking"
   | "missing_phone"
@@ -100,6 +109,27 @@ export type ReminderLog = {
   error: string | null;
   sent_at: string | null;
   created_at: string;
+};
+
+export type ScheduledSms = {
+  id: string;
+  patient_id: string | null;
+  booking_id: string | null;
+  patient_name: string | null;
+  recipient_phone: string | null;
+  /** Sequence step resolved and frozen when the job is created. */
+  sequence_override: number | null;
+  /** Fully rendered message snapshot frozen when the job is created. */
+  message_override: string | null;
+  scheduled_for: string;
+  status: ScheduledSmsStatus;
+  /** Delivery audit row, including skipped, unknown, and dry-run outcomes. */
+  reminder_log_id: string | null;
+  error: string | null;
+  created_at: string;
+  claimed_at: string | null;
+  completed_at: string | null;
+  attempt_count: number;
 };
 
 export type InboxRow = IncomingSms & { patient_name: string | null };

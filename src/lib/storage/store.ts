@@ -7,7 +7,8 @@ import type {
   Patient,
   ReminderLog,
   ReminderSettings,
-  ReviewItem
+  ReviewItem,
+  ScheduledSms
 } from "@/types/clinic";
 
 const defaultTemplate1 =
@@ -363,6 +364,95 @@ export async function getDailySnapshots(limitDays = 90): Promise<DailySnapshot[]
     .order("snapped_at", { ascending: false });
   if (error) throw new Error(`Supabase daily_snapshots select: ${error.message}`);
   return (data ?? []) as DailySnapshot[];
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled SMS
+// ---------------------------------------------------------------------------
+
+export async function createScheduledSms(
+  input: Omit<ScheduledSms, "id" | "status" | "reminder_log_id" | "error" | "claimed_at" | "completed_at" | "attempt_count" | "created_at">
+): Promise<ScheduledSms> {
+  const { data, error } = await supabase
+    .from("scheduled_sms")
+    .insert(input)
+    .select()
+    .single();
+  throwOnError(data, error, "scheduled_sms insert");
+  return data as ScheduledSms;
+}
+
+export async function listScheduledSms(): Promise<ScheduledSms[]> {
+  const { data, error } = await supabase
+    .from("scheduled_sms")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(250);
+  throwOnError(data, error, "scheduled_sms select");
+  return (data ?? []) as ScheduledSms[];
+}
+
+export async function cancelScheduledSms(id: string): Promise<ScheduledSms | null> {
+  const { data, error } = await supabase
+    .from("scheduled_sms")
+    .update({ status: "cancelled", completed_at: nowIso() })
+    .eq("id", id)
+    .eq("status", "pending")
+    .select()
+    .single();
+  if (error?.code === "PGRST116") return null; // not found or not pending
+  throwOnError(data, error, "scheduled_sms cancel");
+  return data as ScheduledSms;
+}
+
+export async function getActiveScheduledSmsPatientIds(): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from("scheduled_sms")
+    .select("patient_id")
+    .in("status", ["pending", "processing"])
+    .not("patient_id", "is", null);
+  if (error) throw new Error(`Supabase scheduled_sms active select: ${error.message}`);
+  return new Set((data ?? []).flatMap((row) => row.patient_id ? [row.patient_id] : []));
+}
+
+export async function claimDueScheduledSms(limit = 25): Promise<ScheduledSms[]> {
+  const { data, error } = await supabase.rpc("claim_due_scheduled_sms", { p_limit: limit });
+  if (error) throw new Error(`Supabase scheduled_sms claim: ${error.message}`);
+  return (data ?? []) as ScheduledSms[];
+}
+
+export async function linkScheduledSmsReservation(id: string, reminderLogId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from("scheduled_sms")
+    .update({ reminder_log_id: reminderLogId })
+    .eq("id", id)
+    .eq("status", "processing")
+    .select("id")
+    .maybeSingle();
+  if (error) throw new Error(`Supabase scheduled_sms reservation link: ${error.message}`);
+  if (!data) throw new Error("Scheduled SMS claim was lost before provider delivery");
+}
+
+export async function completeScheduledSms(
+  id: string,
+  outcome: Extract<ScheduledSms["status"], "sent" | "skipped" | "failed" | "unknown" | "dry_run">,
+  reminderLogId: string | null,
+  error: string | null
+): Promise<ScheduledSms> {
+  const { data, error: updateError } = await supabase
+    .from("scheduled_sms")
+    .update({
+      status: outcome,
+      ...(reminderLogId ? { reminder_log_id: reminderLogId } : {}),
+      error,
+      completed_at: nowIso()
+    })
+    .eq("id", id)
+    .eq("status", "processing")
+    .select()
+    .single();
+  throwOnError(data, updateError, "scheduled_sms complete");
+  return data as ScheduledSms;
 }
 
 // ---------------------------------------------------------------------------
