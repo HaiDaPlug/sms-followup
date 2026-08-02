@@ -2,7 +2,7 @@ import { ReviewActions } from "@/components/ReviewActions";
 import { FailedSmsActions } from "@/components/FailedSmsActions";
 import { BookingMatchActions } from "@/components/BookingMatchActions";
 import { DeliveryUnknownActions } from "@/components/DeliveryUnknownActions";
-import { readStore } from "@/lib/data/repository";
+import { readStoreForUi } from "@/lib/data/repository";
 import { formatDate } from "@/lib/patients/status";
 
 export const dynamic = "force-dynamic";
@@ -19,8 +19,44 @@ const statusLabels: Record<string, string> = {
   ignored: "Ignorerad"
 };
 
+function extractCandidates(
+  rawData: Record<string, unknown>,
+  patients: Array<{ id: string; full_name: string }>
+): Array<{ id: string; name: string | null; tier: string }> {
+  const rawLookups = rawData.identity_lookups;
+  if (!Array.isArray(rawLookups)) return [];
+
+  const seenIds = new Set<string>();
+  const result: Array<{ id: string; name: string | null; tier: string }> = [];
+
+  for (const lookup of rawLookups) {
+    if (typeof lookup !== "object" || lookup === null) continue;
+    const tier = typeof (lookup as Record<string, unknown>).tier === "string"
+      ? String((lookup as Record<string, unknown>).tier)
+      : "";
+    const rawPatients = (lookup as Record<string, unknown>).patients;
+    if (!Array.isArray(rawPatients)) continue;
+
+    for (const p of rawPatients) {
+      if (typeof p !== "object" || p === null) continue;
+      const id = typeof (p as Record<string, unknown>).id === "string"
+        ? String((p as Record<string, unknown>).id)
+        : "";
+      if (!id || seenIds.has(id)) continue;
+      seenIds.add(id);
+      result.push({
+        id,
+        name: patients.find((sp) => sp.id === id)?.full_name ?? null,
+        tier,
+      });
+    }
+  }
+
+  return result;
+}
+
 export default async function ReviewPage() {
-  const store = await readStore();
+  const store = await readStoreForUi();
   const items = store.review_items;
 
   return (
@@ -83,6 +119,7 @@ export default async function ReviewPage() {
                         })()
                       }
                       matchTier={String(item.raw_data.match_tier ?? "")}
+                      candidates={extractCandidates(item.raw_data, store.patients)}
                     />
                   ) : item.status === "open" && item.type === "failed_sms" ? (
                     <FailedSmsActions
