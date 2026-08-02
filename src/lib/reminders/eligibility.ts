@@ -8,7 +8,7 @@ import type {
   ReminderSettings,
   ReviewItem
 } from "@/types/clinic";
-import { readStore } from "@/lib/data/repository";
+import { readStore, readStoreForUi } from "@/lib/data/repository";
 import { isFutureBooking } from "@/lib/import/normalizers";
 import { resolveSteps } from "./steps";
 export { resolveSteps } from "./steps";
@@ -16,6 +16,44 @@ export { resolveSteps } from "./steps";
 function daysBetween(date: string) {
   const diff = Date.now() - new Date(date).getTime();
   return Math.floor(diff / (1000 * 60 * 60 * 24));
+}
+
+export interface EligibilityContext {
+  bookingsByPatient: Map<string, Booking[]>;
+  logsByPatient: Map<string, ReminderLog[]>;
+  openReviewData: string[];
+}
+
+/** Build patient-scoped lookup tables once for list and dashboard views. */
+export function buildEligibilityContext(
+  bookings: Booking[],
+  logs: ReminderLog[],
+  reviewItems: ReviewItem[]
+): EligibilityContext {
+  const bookingsByPatient = new Map<string, Booking[]>();
+  const logsByPatient = new Map<string, ReminderLog[]>();
+
+  for (const booking of bookings) {
+    if (!booking.patient_id) continue;
+    const patientBookings = bookingsByPatient.get(booking.patient_id) ?? [];
+    patientBookings.push(booking);
+    bookingsByPatient.set(booking.patient_id, patientBookings);
+  }
+
+  for (const log of logs) {
+    if (!log.patient_id) continue;
+    const patientLogs = logsByPatient.get(log.patient_id) ?? [];
+    patientLogs.push(log);
+    logsByPatient.set(log.patient_id, patientLogs);
+  }
+
+  return {
+    bookingsByPatient,
+    logsByPatient,
+    openReviewData: reviewItems
+      .filter((item) => item.status === "open")
+      .map((item) => JSON.stringify(item.raw_data))
+  };
 }
 
 export function latestValidBooking(patient: Patient, bookings: Booking[]) {
@@ -76,19 +114,58 @@ export function getNextSequence(
     ? steps.filter((_s, i) => i >= maxSentSeq)
     : steps.filter((s, i) => i >= maxSentSeq && days >= s.day);
 
-  // Among eligible, prefer the highest crossed threshold; fall back to next step for force.
+  // Among eligible, prefer the highest crossed threshold.
   const crossed = eligible.filter((s) => days >= s.day);
-  const nextStep = crossed.length > 0 ? crossed[crossed.length - 1] : (force ? eligible[0] : null);
-  if (!nextStep) return null;
-  return { sequenceNumber: steps.indexOf(nextStep) + 1, daysThreshold: nextStep.day };
+  if (crossed.length > 0) {
+    const nextStep = crossed[crossed.length - 1];
+    return { sequenceNumber: steps.indexOf(nextStep) + 1, daysThreshold: nextStep.day };
+  }
+
+  // Nothing new has crossed yet. For force/manual: re-send the last sent step so the
+  // operator can test without advancing the sequence (e.g. re-send SMS 4 while still
+  // at 212 days rather than jumping ahead to SMS 5).
+  if (force && maxSentSeq > 0) {
+    const lastStep = steps[maxSentSeq - 1];
+    return { sequenceNumber: maxSentSeq, daysThreshold: lastStep.day };
+  }
+
+  // For force with nothing sent yet and nothing crossed, send step 1.
+  if (force) return { sequenceNumber: 1, daysThreshold: steps[0].day };
+
+  return null;
 }
 
-export function calculatePatientReminderStatus(
+/** Resolve the step a future scheduled send should own without re-sending an
+ * already completed step merely because the next threshold has not been met. */
+export function getNextSchedulableSequence(
+  patient: Patient,
+  settings: ReminderSettings,
+  logs: ReminderLog[]
+): NextSequenceInfo {
+  const due = getNextSequence(patient, settings, logs);
+  if (due) return due;
+  if (!patient.last_booking_at) return null;
+
+  const steps = resolveSteps(settings);
+  const maxSentSeq = logsInCurrentCycle(patient.id, logs)
+    .filter((log) => log.status === "sent" || log.status === "dry_run" || log.status === "delivered")
+    .reduce((max, log) => Math.max(max, log.sequence_number ?? 0), 0);
+
+  const nextIndex = maxSentSeq;
+  const nextStep = steps[nextIndex];
+  if (!nextStep) return null;
+  return {
+    sequenceNumber: nextIndex + 1,
+    daysThreshold: nextStep.day
+  };
+}
+
+function calculatePatientReminderStatusFromSlices(
   patient: Patient,
   settings: ReminderSettings,
   bookings: Booking[],
   logs: ReminderLog[],
-  reviewItems: ReviewItem[]
+  hasOpenReview: boolean
 ): PatientReminderStatus {
   if (patient.do_not_contact) return "Do not contact";
   if (!patient.normalized_phone) return "Missing phone";
@@ -101,15 +178,7 @@ export function calculatePatientReminderStatus(
     (log) => log.status === "pending" || log.status === "unknown"
   );
   if (hasPendingDelivery) return "Delivery pending";
-  if (
-    reviewItems.some(
-      (item) =>
-        item.status === "open" &&
-        JSON.stringify(item.raw_data).includes(
-          patient.normalized_phone ?? patient.email ?? patient.full_name
-        )
-    )
-  ) {
+  if (hasOpenReview) {
     return "Needs review";
   }
   if (!patient.last_booking_at) return "No valid booking";
@@ -125,6 +194,44 @@ export function calculatePatientReminderStatus(
   }
 
   return "Ready";
+}
+
+export function calculatePatientReminderStatus(
+  patient: Patient,
+  settings: ReminderSettings,
+  bookings: Booking[],
+  logs: ReminderLog[],
+  reviewItems: ReviewItem[]
+): PatientReminderStatus {
+  return calculatePatientReminderStatusFromSlices(
+    patient,
+    settings,
+    bookings,
+    logs,
+    reviewItems.some(
+      (item) =>
+        item.status === "open" &&
+        JSON.stringify(item.raw_data).includes(
+          patient.normalized_phone ?? patient.email ?? patient.full_name
+        )
+    )
+  );
+}
+
+export function calculatePatientReminderStatusFromContext(
+  patient: Patient,
+  settings: ReminderSettings,
+  context: EligibilityContext
+): PatientReminderStatus {
+  return calculatePatientReminderStatusFromSlices(
+    patient,
+    settings,
+    context.bookingsByPatient.get(patient.id) ?? [],
+    context.logsByPatient.get(patient.id) ?? [],
+    context.openReviewData.some((rawData) =>
+      rawData.includes(patient.normalized_phone ?? patient.email ?? patient.full_name)
+    )
+  );
 }
 
 export async function getEligiblePatients(settings: ReminderSettings) {
@@ -178,6 +285,7 @@ export function calculateDryRunSummary(
   logs: ReminderLog[],
   reviewItems: ReviewItem[]
 ) {
+  const context = buildEligibilityContext(bookings, logs, reviewItems);
   const counts = {
     eligible_count: 0,
     would_send_today: 0,
@@ -189,7 +297,7 @@ export function calculateDryRunSummary(
   };
 
   for (const patient of patients) {
-    const status = calculatePatientReminderStatus(patient, settings, bookings, logs, reviewItems);
+    const status = calculatePatientReminderStatusFromContext(patient, settings, context);
     if (status === "Ready") counts.eligible_count += 1;
     if (status === "Missing phone") counts.excluded_missing_phone += 1;
     if (status === "Future booking") counts.excluded_future_booking += 1;
@@ -203,7 +311,7 @@ export function calculateDryRunSummary(
 }
 
 export async function calculateDashboardStats(): Promise<DashboardStats> {
-  const store = await readStore();
+  const store = await readStoreForUi();
   const settings = store.reminder_settings[0];
   const dryRun = calculateDryRunSummary(
     store.patients,
@@ -218,11 +326,15 @@ export async function calculateDashboardStats(): Promise<DashboardStats> {
 
   const failedSms = store.reminder_logs.filter((log) => log.status === "failed").length;
   const missingPhone = store.patients.filter((patient) => !patient.normalized_phone).length;
-  const duplicatePhones = new Set(
-    store.patients
-      .map((patient) => patient.normalized_phone)
-      .filter((phone, index, list) => phone && list.indexOf(phone) !== index)
-  ).size;
+  const seenPhones = new Set<string>();
+  const duplicatePhoneSet = new Set<string>();
+  for (const patient of store.patients) {
+    const phone = patient.normalized_phone;
+    if (!phone) continue;
+    if (seenPhones.has(phone)) duplicatePhoneSet.add(phone);
+    seenPhones.add(phone);
+  }
+  const duplicatePhones = duplicatePhoneSet.size;
 
   return {
     totalPatients: store.patients.length,
