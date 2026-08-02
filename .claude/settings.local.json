@@ -16,7 +16,8 @@
       "Bash(del \"c:\\\\Users\\\\Hai Pham Bui\\\\Desktop\\\\sms-followup\\\\scripts\\\\migrate.ts\")",
       "Bash(npm list *)",
       "WebFetch(domain:46elks.com)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Skill(dataviz)"
     ]
   }
 }
