@@ -7,6 +7,8 @@ export type SendSmsResult = {
   success: boolean;
   providerMessageId?: string;
   error?: string;
+  /** The provider may have accepted the SMS, so an automatic retry is unsafe. */
+  uncertain?: boolean;
 };
 
 export async function sendSms({ to, message }: SendSmsInput): Promise<SendSmsResult> {
@@ -54,7 +56,8 @@ export async function sendSms({ to, message }: SendSmsInput): Promise<SendSmsRes
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Unknown SMS provider error"
+      error: error instanceof Error ? error.message : "Unknown SMS provider error",
+      uncertain: true,
     };
   }
 }
@@ -72,8 +75,9 @@ async function sendWith46Elks({ to, message }: SendSmsInput): Promise<SendSmsRes
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-  const deliveryUrl = appUrl.startsWith("https://")
-    ? `${appUrl}/api/webhooks/sms-delivery`
+  const deliverySecret = process.env.SMS_DELIVERY_WEBHOOK_SECRET;
+  const deliveryUrl = appUrl.startsWith("https://") && deliverySecret
+    ? `${appUrl}/api/webhooks/sms-delivery?token=${encodeURIComponent(deliverySecret)}`
     : undefined;
 
   const form = new URLSearchParams({
@@ -110,7 +114,8 @@ async function sendWith46Elks({ to, message }: SendSmsInput): Promise<SendSmsRes
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Unknown 46elks error"
+      error: error instanceof Error ? error.message : "Unknown 46elks error",
+      uncertain: true,
     };
   }
 }

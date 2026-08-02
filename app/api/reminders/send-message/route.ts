@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  addReviewItem,
   readStore,
   updateReminderLog,
   updateReviewItem,
@@ -164,14 +165,12 @@ export async function POST(request: Request) {
     result = await sendSms({ to: phone, message });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Oväntat SMS-leverantörsfel";
-    return NextResponse.json(
-      { status: "unknown", error: detail },
-      { status: 502 }
-    );
+    result = { success: false, error: detail, uncertain: true };
   }
 
+  const deliveryStatus = result.success ? "sent" : result.uncertain ? "unknown" : "failed";
   const finalLog = await updateReminderLog(reservation.id, {
-    status: result.success ? "sent" : "failed",
+    status: deliveryStatus,
     provider_message_id: result.providerMessageId ?? null,
     error: result.error ?? null,
     sent_at: result.success ? new Date().toISOString() : null,
@@ -179,12 +178,31 @@ export async function POST(request: Request) {
 
   if (result.success) {
     await updateReviewItem(reviewId, { status: "resolved" });
+  } else if (result.uncertain) {
+    // Provider may have accepted the send — don't resolve the original review
+    // item as "failed"; raise a delivery_unknown item so it gets reconciled
+    // the same way an uncertain cron send does (see process.ts).
+    await addReviewItem({
+      type: "delivery_unknown",
+      severity: "high",
+      title: `Okänd SMS-leverans — omskickning`,
+      description: result.error ?? "Leverantörens svar kunde inte bekräftas.",
+      suggested_action: "Kontrollera leverantören innan meddelandet skickas igen.",
+      status: "open",
+      raw_data: {
+        reminder_log_id: reservation.id,
+        patient_id: patient.id,
+        phone,
+        sequence_number: sequenceNumber,
+        rendered_message: message,
+        booking_id: reviewBookingId,
+      },
+      content_hash: `delivery_unknown:${reservation.id}`,
+    });
   }
 
   return NextResponse.json(
-    result.success
-      ? { status: "sent", log: finalLog }
-      : { status: "failed", error: result.error, log: finalLog },
-    { status: result.success ? 200 : 502 }
+    { status: deliveryStatus, error: result.error ?? null, log: finalLog },
+    { status: result.success ? 200 : result.uncertain ? 202 : 502 }
   );
 }

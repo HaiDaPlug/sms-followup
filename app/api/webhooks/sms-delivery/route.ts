@@ -2,30 +2,39 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase/client";
 
 // 46elks POSTs URL-encoded delivery status updates here when an SMS status changes.
-// Payload: id, status ("delivered"|"failed"|"undelivered"), delivered (ISO timestamp)
+// Payload: id, status ("delivered"|"failed"|"undelivered"), delivered (ISO timestamp, unused —
+// see the "delivered" branch below for why we don't record it onto sent_at)
+function authorized(request: Request) {
+  const secret = process.env.SMS_DELIVERY_WEBHOOK_SECRET;
+  if (!secret) return false;
+  const token = new URL(request.url).searchParams.get("token");
+  return token === secret;
+}
+
 export async function POST(request: Request) {
+  if (!authorized(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const contentType = request.headers.get("content-type") ?? "";
   const body = await request.text();
 
   // Parse both form-encoded (46elks) and JSON payloads
   let id: string | null = null;
   let status: string | null = null;
-  let delivered: string | null = null;
 
   if (contentType.includes("application/json")) {
     try {
       const parsed = JSON.parse(body) as Record<string, unknown>;
-      id        = typeof parsed.id        === "string" ? parsed.id        : null;
-      status    = typeof parsed.status    === "string" ? parsed.status    : null;
-      delivered = typeof parsed.delivered === "string" ? parsed.delivered : null;
+      id     = typeof parsed.id     === "string" ? parsed.id     : null;
+      status = typeof parsed.status === "string" ? parsed.status : null;
     } catch {
       return NextResponse.json({ error: "Ogiltig JSON" }, { status: 400 });
     }
   } else {
     const params = new URLSearchParams(body);
-    id        = params.get("id");
-    status    = params.get("status");
-    delivered = params.get("delivered");
+    id     = params.get("id");
+    status = params.get("status");
   }
 
   if (!id || !status) {
@@ -35,8 +44,11 @@ export async function POST(request: Request) {
   const patch: Record<string, string | null> = { error: null };
 
   if (status === "delivered") {
-    patch.status  = "delivered";
-    patch.sent_at = delivered ?? new Date().toISOString();
+    // sent_at is already set at the moment of the actual send (process.ts);
+    // don't overwrite it with the (possibly delayed) delivery timestamp, or
+    // a slow delivery receipt could shift which day the SMS is bucketed into
+    // for analytics and corrupt "days since SMS" on any linked conversion.
+    patch.status = "delivered";
   } else if (status === "failed" || status === "undelivered") {
     patch.status = "failed";
     patch.error  = `Leverans misslyckades: ${status}`;
