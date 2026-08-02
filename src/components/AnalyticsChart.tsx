@@ -2,30 +2,22 @@
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
+import type { AnalyticsBookingRow, AnalyticsConversionRow } from "@/lib/analytics/getAnalyticsData";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
 interface SeriesPoint {
-  week: string;
+  day: string;
   bookings: number;
   sms: number;
 }
 
-interface BookingRow {
-  id: string;
-  booking_at: string;
-  patient_name: string | null;
-  treatment: string | null;
-  practitioner: string | null;
-  location: string | null;
-  source: string;
-  cancelled: boolean;
-  via_webhook: boolean;
-}
-
 interface Props {
   initialSeries: SeriesPoint[];
-  initialBookings: BookingRow[];
+  initialBookings: AnalyticsBookingRow[];
+  initialConversions: AnalyticsConversionRow[];
+  initialActiveBookingsCount: number;
+  initialSmsSentCount: number;
   initialDays: number;
 }
 
@@ -36,39 +28,92 @@ const PERIOD_OPTIONS = [
   { label: "365 dagar", days: 365 },
 ];
 
-function formatWeek(week: string): string {
-  const d = new Date(week);
+// Validated categorical pair (see scripts/validate_palette.js) — brand teal + a
+// clearly separated violet, both >= 3:1 on the white chart surface.
+const COLOR_BOOKINGS = "#1c9686";
+const COLOR_SMS = "#4a3aa7";
+
+function formatDay(day: string): string {
+  const d = new Date(day);
   return d.toLocaleDateString("sv-SE", { day: "numeric", month: "short" });
 }
 
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return "—";
   return new Date(dateStr).toLocaleDateString("sv-SE", {
     day: "numeric", month: "short", year: "numeric"
   });
 }
 
-export function AnalyticsChart({ initialSeries, initialBookings, initialDays }: Props) {
+export function AnalyticsChart({
+  initialSeries,
+  initialBookings,
+  initialConversions,
+  initialActiveBookingsCount,
+  initialSmsSentCount,
+  initialDays,
+}: Props) {
   const [days, setDays] = useState(initialDays);
   const [series, setSeries] = useState(initialSeries);
   const [bookings, setBookings] = useState(initialBookings);
+  const [conversions, setConversions] = useState(initialConversions);
+  const [activeBookingsCount, setActiveBookingsCount] = useState(initialActiveBookingsCount);
+  const [smsSentCount, setSmsSentCount] = useState(initialSmsSentCount);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function loadPeriod(d: number) {
-    setDays(d);
     setLoading(true);
-    const res = await fetch(`/api/analytics?days=${d}`);
-    const data = await res.json() as { series: SeriesPoint[]; bookings: BookingRow[] };
-    setSeries(data.series);
-    setBookings(data.bookings);
-    setLoading(false);
+    setLoadError(null);
+    try {
+      const res = await fetch(`/api/analytics?days=${d}`);
+      if (!res.ok) throw new Error(`Analytics request failed with ${res.status}`);
+      const data = await res.json() as {
+        series: SeriesPoint[];
+        bookings: AnalyticsBookingRow[];
+        conversions: AnalyticsConversionRow[];
+        activeBookingsCount: number;
+        smsSentCount: number;
+      };
+      setDays(d);
+      setSeries(data.series);
+      setBookings(data.bookings);
+      setConversions(data.conversions);
+      setActiveBookingsCount(data.activeBookingsCount);
+      setSmsSentCount(data.smsSentCount);
+    } catch (error) {
+      console.error("Failed to load analytics period", error);
+      setLoadError("Kunde inte ladda analysdata. Försök igen.");
+    } finally {
+      setLoading(false);
+    }
   }
+
+  const hasData = series.some((s) => s.bookings > 0 || s.sms > 0);
 
   const option = {
     tooltip: {
       trigger: "axis",
+      axisPointer: { type: "line", lineStyle: { color: "var(--border-dark)", width: 1 } },
       backgroundColor: "var(--surface)",
       borderColor: "var(--border)",
-      textStyle: { color: "var(--text)", fontSize: 12 },
+      borderWidth: 1,
+      padding: 10,
+      extraCssText: "box-shadow: 0 8px 24px rgba(13,31,26,0.14); border-radius: 8px;",
+      textStyle: { color: "var(--text)", fontSize: 12.5 },
+      formatter: (params: unknown) => {
+        const rows = params as Array<{ axisValueLabel: string; seriesName: string; value: number; color: string }>;
+        if (!rows.length) return "";
+        const body = rows.map((p) => `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:20px;padding:2px 0;">
+            <span style="display:flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;">
+              <span style="display:inline-block;width:10px;height:2px;border-radius:1px;background:${p.color};"></span>
+              ${p.seriesName}
+            </span>
+            <span style="font-weight:700;color:var(--text);font-variant-numeric:tabular-nums;">${p.value}</span>
+          </div>`).join("");
+        return `<div style="font-weight:600;font-size:11px;color:var(--text-muted);margin-bottom:6px;letter-spacing:0.02em;">${rows[0].axisValueLabel}</div>${body}`;
+      },
     },
     legend: {
       data: ["Bokningar", "SMS skickade"],
@@ -77,57 +122,50 @@ export function AnalyticsChart({ initialSeries, initialBookings, initialDays }: 
       icon: "circle",
       itemWidth: 8,
       itemHeight: 8,
+      itemGap: 24,
     },
-    grid: { left: 40, right: 40, top: 16, bottom: 40 },
+    grid: { left: 36, right: 16, top: 20, bottom: 44 },
     xAxis: {
       type: "category",
-      data: series.map((s) => formatWeek(s.week)),
+      data: series.map((s) => formatDay(s.day)),
+      boundaryGap: false,
       axisLine: { lineStyle: { color: "var(--border)" } },
       axisTick: { show: false },
       axisLabel: { color: "var(--text-muted)", fontSize: 11 },
     },
-    yAxis: [
-      {
-        type: "value",
-        name: "Bokningar",
-        nameTextStyle: { color: "var(--text-muted)", fontSize: 11 },
-        axisLabel: { color: "var(--text-muted)", fontSize: 11 },
-        splitLine: { lineStyle: { color: "var(--border)", type: "dashed" } },
-        minInterval: 1,
-      },
-      {
-        type: "value",
-        name: "SMS",
-        nameTextStyle: { color: "var(--text-muted)", fontSize: 11 },
-        axisLabel: { color: "var(--text-muted)", fontSize: 11 },
-        splitLine: { show: false },
-        minInterval: 1,
-      },
-    ],
+    yAxis: {
+      type: "value",
+      name: "Antal",
+      nameTextStyle: { color: "var(--text-muted)", fontSize: 11, align: "left" },
+      axisLine: { show: false },
+      axisLabel: { color: "var(--text-muted)", fontSize: 11 },
+      splitLine: { lineStyle: { color: "var(--border)", type: "solid" } },
+      minInterval: 1,
+    },
     series: [
       {
         name: "Bokningar",
         type: "line",
-        yAxisIndex: 0,
         data: series.map((s) => s.bookings),
-        smooth: true,
+        showSymbol: false,
         symbol: "circle",
-        symbolSize: 5,
-        lineStyle: { width: 2, color: "#4f8ef7" },
-        itemStyle: { color: "#4f8ef7" },
-        areaStyle: { color: "rgba(79,142,247,0.08)" },
+        symbolSize: 8,
+        lineStyle: { width: 2, color: COLOR_BOOKINGS },
+        itemStyle: { color: COLOR_BOOKINGS, borderColor: "var(--surface)", borderWidth: 2 },
+        areaStyle: { color: COLOR_BOOKINGS, opacity: 0.08 },
+        emphasis: { focus: "series" },
       },
       {
         name: "SMS skickade",
         type: "line",
-        yAxisIndex: 1,
         data: series.map((s) => s.sms),
-        smooth: true,
+        showSymbol: false,
         symbol: "circle",
-        symbolSize: 5,
-        lineStyle: { width: 2, color: "#22c55e" },
-        itemStyle: { color: "#22c55e" },
-        areaStyle: { color: "rgba(34,197,94,0.08)" },
+        symbolSize: 8,
+        lineStyle: { width: 2, color: COLOR_SMS },
+        itemStyle: { color: COLOR_SMS, borderColor: "var(--surface)", borderWidth: 2 },
+        areaStyle: { color: COLOR_SMS, opacity: 0.08 },
+        emphasis: { focus: "series" },
       },
     ],
   };
@@ -135,90 +173,157 @@ export function AnalyticsChart({ initialSeries, initialBookings, initialDays }: 
   return (
     <div style={{ display: "grid", gap: 24 }}>
 
-      {/* Period selector */}
-      <div style={{ display: "flex", gap: 6 }}>
-        {PERIOD_OPTIONS.map((o) => (
-          <button
-            key={o.days}
-            type="button"
-            className={days === o.days ? "" : "secondary"}
-            disabled={loading}
-            onClick={() => loadPeriod(o.days)}
-            style={{ fontSize: 12, padding: "4px 12px", minHeight: "unset" }}
-          >
-            {o.label}
-          </button>
-        ))}
+      {/* Filter row — scopes the stats, chart and both tables below it */}
+      <div className="an-toolbar">
+        <h3 className="section-title" style={{ marginBottom: 0 }}>Aktivitet över tid</h3>
+        <div className="seg">
+          {PERIOD_OPTIONS.map((o) => (
+            <button
+              key={o.days}
+              type="button"
+              className={days === o.days ? "active" : undefined}
+              disabled={loading}
+              onClick={() => loadPeriod(o.days)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Chart */}
-      <div style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius)",
-        padding: "20px 16px 12px",
-        opacity: loading ? 0.5 : 1,
-        transition: "opacity 150ms",
-      }}>
-        {series.length === 0 ? (
-          <div className="empty-state" style={{ padding: "48px 0" }}>
-            Ingen data för perioden.
+      {loadError && <div className="notice error">{loadError}</div>}
+
+      {/* Stats + chart — one card, so the numbers and the trend they summarize read as one unit */}
+      <div className="card" style={{ padding: 0, opacity: loading ? 0.6 : 1, transition: "opacity 150ms" }}>
+        <div className="an-stats">
+          <div>
+            <p className="metric">SMS skickade</p>
+            <p className="metric-value" style={{ fontSize: 28, color: smsSentCount === 0 ? "var(--text-faint)" : "var(--text)" }}>{smsSentCount}</p>
           </div>
-        ) : (
-          <ReactECharts option={option} style={{ height: 280 }} />
-        )}
+          <div>
+            <p className="metric">Bokningar</p>
+            <p className="metric-value" style={{ fontSize: 28, color: activeBookingsCount === 0 ? "var(--text-faint)" : "var(--text)" }}>{activeBookingsCount}</p>
+          </div>
+          <div>
+            <p className="metric">SMS-matchade</p>
+            <p className="metric-value" style={{ fontSize: 28, color: conversions.length === 0 ? "var(--text-faint)" : "var(--text)" }}>{conversions.length}</p>
+          </div>
+        </div>
+
+        <div style={{ padding: "20px 16px 12px" }}>
+          {!hasData ? (
+            <div className="empty-state" style={{ padding: "56px 0" }}>
+              Ingen aktivitet under perioden.
+            </div>
+          ) : (
+            <ReactECharts option={option} style={{ height: 280 }} notMerge />
+          )}
+        </div>
       </div>
 
-      {/* Bookings table */}
-      <div>
-        <div style={{ fontFamily: "var(--font-head)", fontSize: 14, fontWeight: 700, marginBottom: 12, color: "var(--text)" }}>
-          Bokningar under perioden
-          <span style={{ fontWeight: 400, fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>
-            ({bookings.length} st)
-          </span>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Datum</th>
-                <th>Patient</th>
-                <th>Tjänst</th>
-                <th>Behandlare</th>
-                <th>Källa</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bookings.map((b) => (
-                <tr key={b.id}>
-                  <td className="muted" style={{ whiteSpace: "nowrap" }}>{formatDate(b.booking_at)}</td>
-                  <td style={{ fontWeight: 500 }}>{b.patient_name ?? <span className="muted">—</span>}</td>
-                  <td className="muted">{b.treatment ?? "—"}</td>
-                  <td className="muted">{b.practitioner ?? "—"}</td>
-                  <td>
-                    <span className="badge" style={{ fontSize: 10.5 }}>
-                      {b.via_webhook ? "webhook" : "csv"}
-                    </span>
-                  </td>
-                  <td>
-                    {b.cancelled
-                      ? <span className="badge failed" style={{ fontSize: 10.5 }}>Avbokad</span>
-                      : <span className="badge sent" style={{ fontSize: 10.5 }}>Aktiv</span>
-                    }
-                  </td>
-                </tr>
-              ))}
-              {bookings.length === 0 && (
+      {/* Bottom: bookings + SMS-matched bookings */}
+      <div className="analytics-bottom-grid">
+
+        {/* Bookings table */}
+        <div>
+          <h4 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            Bokningar under perioden
+            <span style={{ fontFamily: "var(--font-body)", fontWeight: 400, fontSize: 12, color: "var(--text-muted)" }}>
+              ({activeBookingsCount} st)
+            </span>
+          </h4>
+          <div className="table-wrap">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan={6}>
-                    <div className="empty-state">Inga bokningar under perioden.</div>
-                  </td>
+                  <th>Bokad</th>
+                  <th>Bokningstid</th>
+                  <th>Patient</th>
+                  <th>Tjänst</th>
+                  <th>Behandlare</th>
+                  <th>Källa</th>
+                  <th>Status</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {bookings.map((b) => (
+                  <tr key={b.id}>
+                    <td className="muted" style={{ whiteSpace: "nowrap" }}>{formatDate(b.recorded_at)}</td>
+                    <td className="muted" style={{ whiteSpace: "nowrap" }}>{formatDate(b.booking_at)}</td>
+                    <td style={{ fontWeight: 500 }}>{b.patient_name ?? <span className="muted">—</span>}</td>
+                    <td className="muted">{b.treatment ?? "—"}</td>
+                    <td className="muted">{b.practitioner ?? "—"}</td>
+                    <td>
+                      <span className="badge" style={{ fontSize: 10.5 }}>
+                        {b.via_webhook ? "webhook" : "csv"}
+                      </span>
+                    </td>
+                    <td>
+                      {b.cancelled
+                        ? <span className="badge failed" style={{ fontSize: 10.5 }}>Avbokad</span>
+                        : <span className="badge sent" style={{ fontSize: 10.5 }}>Aktiv</span>
+                      }
+                    </td>
+                  </tr>
+                ))}
+                {bookings.length === 0 && (
+                  <tr>
+                    <td colSpan={7}>
+                      <div className="empty-state">Inga bokningar under perioden.</div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
+
+        {/* SMS-matched bookings */}
+        <div>
+          <h4 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            SMS-matchade bokningar
+            <span style={{ fontFamily: "var(--font-body)", fontWeight: 400, fontSize: 12, color: "var(--text-muted)" }}>
+              ({conversions.length} st)
+            </span>
+          </h4>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Patient</th>
+                  <th>Bokad</th>
+                  <th>SMS skickat</th>
+                  <th>Dagar sedan SMS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {conversions.map((c) => (
+                  <tr key={c.id}>
+                    <td style={{ fontWeight: 500 }}>{c.patient_name ?? <span className="muted">—</span>}</td>
+                    <td className="muted" style={{ whiteSpace: "nowrap" }}>{formatDate(c.booking_effective_at)}</td>
+                    <td className="muted" style={{ whiteSpace: "nowrap" }}>
+                      {formatDate(c.reminder_log_sent_at)}
+                      {c.sequence_number != null && (
+                        <span className="badge" style={{ fontSize: 10.5, marginLeft: 6 }}>steg {c.sequence_number}</span>
+                      )}
+                    </td>
+                    <td>
+                      <span className="badge sent" style={{ fontSize: 10.5 }}>{c.days_since_sms} dagar</span>
+                    </td>
+                  </tr>
+                ))}
+                {conversions.length === 0 && (
+                  <tr>
+                    <td colSpan={4}>
+                      <div className="empty-state">Inga matchade bokningar under perioden.</div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
       </div>
 
     </div>
