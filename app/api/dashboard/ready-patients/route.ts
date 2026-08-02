@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { readStore } from "@/lib/data/repository";
-import { calculatePatientReminderStatus } from "@/lib/reminders/eligibility";
+import { readStoreForUi } from "@/lib/data/repository";
+import { buildEligibilityContext, calculatePatientReminderStatusFromContext } from "@/lib/reminders/eligibility";
 
 const PAGE_SIZE = 50;
 
@@ -9,8 +9,13 @@ export async function GET(request: Request) {
   const sort = searchParams.get("sort") ?? "oldest";
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10));
 
-  const store = await readStore();
+  const store = await readStoreForUi();
   const settings = store.reminder_settings[0];
+  const eligibilityContext = buildEligibilityContext(
+    store.bookings,
+    store.reminder_logs,
+    store.review_items
+  );
 
   const smsCountByPatient = new Map<string, number>();
   for (const log of store.reminder_logs) {
@@ -23,13 +28,7 @@ export async function GET(request: Request) {
   const all = store.patients
     .filter(
       (p) =>
-        calculatePatientReminderStatus(
-          p,
-          settings,
-          store.bookings,
-          store.reminder_logs,
-          store.review_items
-        ) === "Ready"
+        calculatePatientReminderStatusFromContext(p, settings, eligibilityContext) === "Ready"
     )
     .map((p) => ({
       id: p.id,

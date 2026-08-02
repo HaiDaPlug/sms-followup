@@ -1,10 +1,10 @@
-import { readStore } from "@/lib/data/repository";
+import { readStoreForUi } from "@/lib/data/repository";
 import { SmsHistoryClient, type PatientRow } from "@/components/SmsHistoryClient";
 
 export const dynamic = "force-dynamic";
 
 export default async function SmsHistoryPage() {
-  const store = await readStore();
+  const store = await readStoreForUi();
   const patientMap = new Map(store.patients.map((p) => [p.id, p]));
 
   const grouped = new Map<string, PatientRow>();

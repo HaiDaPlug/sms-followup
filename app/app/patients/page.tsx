@@ -2,8 +2,8 @@ import Link from "next/link";
 import { AddPatientButton } from "@/components/AddPatientButton";
 import { PatientSearch } from "@/components/PatientSearch";
 import { PatientsClient } from "@/components/PatientsClient";
-import { readStore } from "@/lib/data/repository";
-import { calculatePatientReminderStatus } from "@/lib/reminders/eligibility";
+import { readStoreForUi } from "@/lib/data/repository";
+import { buildEligibilityContext, calculatePatientReminderStatusFromContext } from "@/lib/reminders/eligibility";
 import { resolveSteps } from "@/lib/reminders/steps";
 import { daysSince, patientDisplayName } from "@/lib/patients/status";
 
@@ -49,8 +49,13 @@ export default async function PatientsPage({
 }) {
   const { status: active = "all", sort = "oldest", q = "", page = "1" } = await searchParams;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const store = await readStore();
+  const store = await readStoreForUi();
   const settings = store.reminder_settings[0];
+  const eligibilityContext = buildEligibilityContext(
+    store.bookings,
+    store.reminder_logs,
+    store.review_items
+  );
 
   const search = q.trim().toLowerCase();
 
@@ -65,13 +70,7 @@ export default async function PatientsPage({
   let patients = store.patients
     .map((patient) => ({
       patient,
-      status: calculatePatientReminderStatus(
-        patient,
-        settings,
-        store.bookings,
-        store.reminder_logs,
-        store.review_items
-      ),
+      status: calculatePatientReminderStatusFromContext(patient, settings, eligibilityContext),
       logs: logsByPatient.get(patient.id) ?? [],
     }))
     .filter((row) => active === "all" || row.status === active)
@@ -145,12 +144,14 @@ export default async function PatientsPage({
           border-right: 1px solid var(--border);
         }
         .pt-sort-seg a:last-child { border-right: none; }
-        .pt-sort-seg a:hover { background: var(--border); color: var(--text); }
+        .pt-sort-seg a:hover { color: #073B2C; }
         .pt-sort-seg a.active {
-          background: #073B2C;
+          background-color: #073B2C;
+          background-image: var(--btn-sheen);
           color: #fff;
           font-weight: 600;
         }
+        .pt-sort-seg a.active::before { display: none; }
         .pt-filter-bar {
           display: flex;
           gap: 6px;
@@ -170,16 +171,17 @@ export default async function PatientsPage({
           overflow: hidden;
         }
         .pt-filter-bar a:hover {
-          border-color: var(--border-dark);
-          color: var(--text);
-          background: var(--surface-sub);
+          border-color: #5bbfb5;
+          color: #073B2C;
         }
         .pt-filter-bar a.active {
-          background: #073B2C;
+          background-color: #073B2C;
+          background-image: var(--btn-sheen);
           border-color: #073B2C;
           color: #fff;
           font-weight: 600;
         }
+        .pt-filter-bar a.active::before { display: none; }
         .pt-control-bar {
           display: flex;
           align-items: center;
@@ -217,7 +219,7 @@ export default async function PatientsPage({
       {/* Header */}
       <div className="pt-header-row">
         <div className="pt-header-left">
-          <h2 className="page-title" style={{ marginBottom: 0 }}>Patienter</h2>
+          <h2 className="page-title" style={{ marginBottom: 0 }}>Kunder</h2>
           <span className="pt-count-chip">{totalFiltered} / {store.patients.length}</span>
         </div>
         <AddPatientButton />
@@ -228,11 +230,11 @@ export default async function PatientsPage({
         <div className="pt-filter-bar">
           {filters.map((filter) => (
             <Link
-              className={active === filter ? "active" : undefined}
+              className={`sweep-btn${active === filter ? " active" : ""}`}
               href={buildHref(currentParams, { status: filter, page: "1" })}
               key={filter}
             >
-              {filterLabels[filter] ?? filter}
+              <span>{filterLabels[filter] ?? filter}</span>
             </Link>
           ))}
         </div>
@@ -242,16 +244,16 @@ export default async function PatientsPage({
 
           <div className="pt-sort-seg">
             <Link
-              className={sort === "oldest" ? "active" : undefined}
+              className={`sweep-btn${sort === "oldest" ? " active" : ""}`}
               href={buildHref(currentParams, { sort: "oldest", page: "1" })}
             >
-              Äldst först
+              <span>Äldst först</span>
             </Link>
             <Link
-              className={sort === "recent" ? "active" : undefined}
+              className={`sweep-btn${sort === "recent" ? " active" : ""}`}
               href={buildHref(currentParams, { sort: "recent", page: "1" })}
             >
-              Senast först
+              <span>Senast först</span>
             </Link>
           </div>
         </div>
