@@ -8,7 +8,8 @@ import type {
   ReminderSettings,
   ReviewItem
 } from "@/types/clinic";
-import { readStore, readStoreForUi } from "@/lib/data/repository";
+import { readStore } from "@/lib/data/repository";
+import { readStoreForUi } from "@/lib/data/readStoreForUi";
 import { isFutureBooking } from "@/lib/import/normalizers";
 import { resolveSteps } from "./steps";
 export { resolveSteps } from "./steps";
