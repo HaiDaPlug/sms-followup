@@ -5,8 +5,10 @@ export const dynamic = "force-dynamic";
 
 export default async function AnalyticsPage() {
   const days = 90;
-  const { series, bookings, conversions, activeBookingsCount, smsSentCount } =
-    await getAnalyticsData(days);
+  const {
+    series, bookings, conversions, activeBookingsCount,
+    smsSentCount, smsPatientCount, conversionRate,
+  } = await getAnalyticsData(days);
 
   return (
     <>
@@ -22,6 +24,8 @@ export default async function AnalyticsPage() {
         initialConversions={conversions}
         initialActiveBookingsCount={activeBookingsCount}
         initialSmsSentCount={smsSentCount}
+        initialSmsPatientCount={smsPatientCount}
+        initialConversionRate={conversionRate}
         initialDays={days}
       />
     </>

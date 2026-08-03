@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AnalyticsBookingRow, AnalyticsConversionRow } from "@/lib/analytics/getAnalyticsData";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
@@ -18,6 +18,8 @@ interface Props {
   initialConversions: AnalyticsConversionRow[];
   initialActiveBookingsCount: number;
   initialSmsSentCount: number;
+  initialSmsPatientCount: number;
+  initialConversionRate: number | null;
   initialDays: number;
 }
 
@@ -51,6 +53,8 @@ export function AnalyticsChart({
   initialConversions,
   initialActiveBookingsCount,
   initialSmsSentCount,
+  initialSmsPatientCount,
+  initialConversionRate,
   initialDays,
 }: Props) {
   const [days, setDays] = useState(initialDays);
@@ -59,14 +63,25 @@ export function AnalyticsChart({
   const [conversions, setConversions] = useState(initialConversions);
   const [activeBookingsCount, setActiveBookingsCount] = useState(initialActiveBookingsCount);
   const [smsSentCount, setSmsSentCount] = useState(initialSmsSentCount);
+  const [smsPatientCount, setSmsPatientCount] = useState(initialSmsPatientCount);
+  const [conversionRate, setConversionRate] = useState(initialConversionRate);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Period switches can overlap: a slow 365-day request must not overwrite a
+  // fast 30-day one that the user asked for afterwards.
+  const inFlight = useRef<AbortController | null>(null);
+  useEffect(() => () => inFlight.current?.abort(), []);
+
   async function loadPeriod(d: number) {
+    inFlight.current?.abort();
+    const controller = new AbortController();
+    inFlight.current = controller;
+
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch(`/api/analytics?days=${d}`);
+      const res = await fetch(`/api/analytics?days=${d}`, { signal: controller.signal });
       if (!res.ok) throw new Error(`Analytics request failed with ${res.status}`);
       const data = await res.json() as {
         series: SeriesPoint[];
@@ -74,6 +89,8 @@ export function AnalyticsChart({
         conversions: AnalyticsConversionRow[];
         activeBookingsCount: number;
         smsSentCount: number;
+        smsPatientCount: number;
+        conversionRate: number | null;
       };
       setDays(d);
       setSeries(data.series);
@@ -81,11 +98,14 @@ export function AnalyticsChart({
       setConversions(data.conversions);
       setActiveBookingsCount(data.activeBookingsCount);
       setSmsSentCount(data.smsSentCount);
+      setSmsPatientCount(data.smsPatientCount);
+      setConversionRate(data.conversionRate);
     } catch (error) {
+      if ((error as Error)?.name === "AbortError") return; // superseded — keep the newer request's state
       console.error("Failed to load analytics period", error);
       setLoadError("Kunde inte ladda analysdata. Försök igen.");
     } finally {
-      setLoading(false);
+      if (inFlight.current === controller) setLoading(false);
     }
   }
 
@@ -207,6 +227,22 @@ export function AnalyticsChart({
           <div>
             <p className="metric">SMS-matchade</p>
             <p className="metric-value" style={{ fontSize: 28, color: conversions.length === 0 ? "var(--text-faint)" : "var(--text)" }}>{conversions.length}</p>
+          </div>
+          <div>
+            <p className="metric" title="Andel av de kunder som fick SMS under perioden som därefter bokade om.">
+              Konverteringsgrad
+            </p>
+            <p
+              className="metric-value"
+              style={{ fontSize: 28, color: conversionRate === null ? "var(--text-faint)" : "var(--text)" }}
+            >
+              {conversionRate === null ? "—" : `${Math.round(conversionRate * 100)} %`}
+            </p>
+            {smsPatientCount > 0 && (
+              <p className="metric" style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                av {smsPatientCount} kunder
+              </p>
+            )}
           </div>
         </div>
 

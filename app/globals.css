@@ -401,7 +401,7 @@ button, input, select, textarea { font: inherit; }
 
 .an-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-bottom: 1px solid var(--border);
 }
 
@@ -411,6 +411,14 @@ button, input, select, textarea { font: inherit; }
 }
 
 .an-stats > div:last-child { border-right: none; }
+
+/* Two-up before collapsing fully — four metrics get too narrow to read on
+   tablet widths, and the hairline borders need resetting per row. */
+@media (max-width: 900px) {
+  .an-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .an-stats > div:nth-child(2n) { border-right: none; }
+  .an-stats > div:nth-child(-n + 2) { border-bottom: 1px solid var(--border); }
+}
 
 @media (max-width: 600px) {
   .an-stats { grid-template-columns: 1fr; }
