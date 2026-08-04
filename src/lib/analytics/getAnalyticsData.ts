@@ -2,7 +2,14 @@ import "server-only";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { buildStockholmDayKeys, stockholmDayKey, windowStartIso } from "@/lib/analytics/dayKeys";
 import { calculateConversionRate } from "@/lib/analytics/conversionRate";
+import {
+  DEFAULT_ATTRIBUTION_DAYS,
+  filterByAttributionWindow,
+  type AttributionDays,
+} from "@/lib/analytics/attributionWindow";
 
+/** Time range shown on the chart. Distinct from AttributionDays, which decides
+ *  how long after an SMS a rebooking still counts as attributable. */
 export type AnalyticsDays = 30 | 90 | 180 | 365;
 
 export interface AnalyticsSeriesPoint {
@@ -45,6 +52,11 @@ export interface AnalyticsData {
    *  smsPatientCount (0-1). Null when no SMS went out in the window. */
   conversionRate: number | null;
   days: number;
+  /** Attribution window these conversions were filtered to. */
+  attributionDays: AttributionDays;
+  /** Recorded candidates that fell outside the attribution window. Surfaced so
+   *  a narrow window doesn't look like missing data. */
+  conversionsOutsideWindow: number;
 }
 
 /**
@@ -78,7 +90,10 @@ async function fetchAllRows<T>(
 }
 
 
-export async function getAnalyticsData(days: AnalyticsDays): Promise<AnalyticsData> {
+export async function getAnalyticsData(
+  days: AnalyticsDays,
+  attributionDays: AttributionDays = DEFAULT_ATTRIBUTION_DAYS
+): Promise<AnalyticsData> {
   const now = new Date();
   const dayKeys = buildStockholmDayKeys(days, now);
   const since = windowStartIso(dayKeys);
@@ -185,7 +200,11 @@ export async function getAnalyticsData(days: AnalyticsDays): Promise<AnalyticsDa
   const activeBookingsCount = bookingRows.filter((b) => !b.cancelled).length;
   const smsSentCount = smsLogs?.length ?? 0;
 
-  const conversionRows: AnalyticsConversionRow[] = (conversions ?? []).map((c) => ({
+  // Conversions are stored at a 365-day lookback; narrow to the requested
+  // attribution window here so the same rows can answer any window.
+  const attributed = filterByAttributionWindow(conversions, attributionDays);
+
+  const conversionRows: AnalyticsConversionRow[] = attributed.map((c) => ({
     id: c.id,
     patient_name: c.patient_name,
     booking_effective_at: c.booking_effective_at,
@@ -196,7 +215,7 @@ export async function getAnalyticsData(days: AnalyticsDays): Promise<AnalyticsDa
 
   const { smsPatientCount, conversionRate } = calculateConversionRate(
     smsLogs.map((l) => l.patient_id),
-    conversions.map((c) => c.patient_id)
+    attributed.map((c) => c.patient_id)
   );
 
   return {
@@ -208,5 +227,7 @@ export async function getAnalyticsData(days: AnalyticsDays): Promise<AnalyticsDa
     smsPatientCount,
     conversionRate,
     days,
+    attributionDays,
+    conversionsOutsideWindow: conversions.length - attributed.length,
   };
 }

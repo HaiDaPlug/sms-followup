@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import type { AnalyticsBookingRow, AnalyticsConversionRow } from "@/lib/analytics/getAnalyticsData";
+import { ATTRIBUTION_WINDOWS, type AttributionDays } from "@/lib/analytics/attributionWindow";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
@@ -21,6 +22,8 @@ interface Props {
   initialSmsPatientCount: number;
   initialConversionRate: number | null;
   initialDays: number;
+  initialAttributionDays: AttributionDays;
+  initialConversionsOutsideWindow: number;
 }
 
 const PERIOD_OPTIONS = [
@@ -56,8 +59,14 @@ export function AnalyticsChart({
   initialSmsPatientCount,
   initialConversionRate,
   initialDays,
+  initialAttributionDays,
+  initialConversionsOutsideWindow,
 }: Props) {
   const [days, setDays] = useState(initialDays);
+  const [attributionDays, setAttributionDays] = useState<AttributionDays>(initialAttributionDays);
+  const [conversionsOutsideWindow, setConversionsOutsideWindow] = useState(
+    initialConversionsOutsideWindow
+  );
   const [series, setSeries] = useState(initialSeries);
   const [bookings, setBookings] = useState(initialBookings);
   const [conversions, setConversions] = useState(initialConversions);
@@ -73,7 +82,7 @@ export function AnalyticsChart({
   const inFlight = useRef<AbortController | null>(null);
   useEffect(() => () => inFlight.current?.abort(), []);
 
-  async function loadPeriod(d: number) {
+  async function load(d: number, attribution: AttributionDays) {
     inFlight.current?.abort();
     const controller = new AbortController();
     inFlight.current = controller;
@@ -81,7 +90,10 @@ export function AnalyticsChart({
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch(`/api/analytics?days=${d}`, { signal: controller.signal });
+      const res = await fetch(
+        `/api/analytics?days=${d}&attributionDays=${attribution}`,
+        { signal: controller.signal }
+      );
       if (!res.ok) throw new Error(`Analytics request failed with ${res.status}`);
       const data = await res.json() as {
         series: SeriesPoint[];
@@ -91,8 +103,10 @@ export function AnalyticsChart({
         smsSentCount: number;
         smsPatientCount: number;
         conversionRate: number | null;
+        conversionsOutsideWindow: number;
       };
       setDays(d);
+      setAttributionDays(attribution);
       setSeries(data.series);
       setBookings(data.bookings);
       setConversions(data.conversions);
@@ -100,6 +114,7 @@ export function AnalyticsChart({
       setSmsSentCount(data.smsSentCount);
       setSmsPatientCount(data.smsPatientCount);
       setConversionRate(data.conversionRate);
+      setConversionsOutsideWindow(data.conversionsOutsideWindow);
     } catch (error) {
       if ((error as Error)?.name === "AbortError") return; // superseded — keep the newer request's state
       console.error("Failed to load analytics period", error);
@@ -203,7 +218,7 @@ export function AnalyticsChart({
               type="button"
               className={days === o.days ? "active" : undefined}
               disabled={loading}
-              onClick={() => loadPeriod(o.days)}
+              onClick={() => load(o.days, attributionDays)}
             >
               {o.label}
             </button>
@@ -229,8 +244,11 @@ export function AnalyticsChart({
             <p className="metric-value" style={{ fontSize: 28, color: conversions.length === 0 ? "var(--text-faint)" : "var(--text)" }}>{conversions.length}</p>
           </div>
           <div>
-            <p className="metric" title="Andel av de kunder som fick SMS under perioden som därefter bokade om.">
-              Konverteringsgrad
+            <p
+              className="metric"
+              title={`Andel av de kunder som fick SMS under perioden som bokade om inom ${attributionDays} dagar.`}
+            >
+              Konverteringsgrad <span style={{ color: "var(--text-faint)" }}>· {attributionDays} d</span>
             </p>
             <p
               className="metric-value"
@@ -316,12 +334,37 @@ export function AnalyticsChart({
 
         {/* SMS-matched bookings */}
         <div>
-          <h4 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+          <h4 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
             SMS-matchade bokningar
             <span style={{ fontFamily: "var(--font-body)", fontWeight: 400, fontSize: 12, color: "var(--text-muted)" }}>
               ({conversions.length} st)
             </span>
+            {/* Scoped to this table and the conversion rate only — deliberately
+                separate from the period selector above, which scopes everything. */}
+            <span className="an-attribution" style={{ marginLeft: "auto" }}>
+              <span className="an-attribution-label">Tillskrivs inom</span>
+              <span className="seg seg-sm">
+                {ATTRIBUTION_WINDOWS.map((w) => (
+                  <button
+                    key={w}
+                    type="button"
+                    className={attributionDays === w ? "active" : undefined}
+                    disabled={loading}
+                    onClick={() => load(days, w)}
+                    title={`Räkna en ombokning som SMS-driven om den skedde inom ${w} dagar efter utskicket`}
+                  >
+                    {w} d
+                  </button>
+                ))}
+              </span>
+            </span>
           </h4>
+          {conversionsOutsideWindow > 0 && (
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>
+              {conversionsOutsideWindow} ytterligare ombokning{conversionsOutsideWindow === 1 ? "" : "ar"} skedde
+              efter mer än {attributionDays} dagar och räknas inte här.
+            </p>
+          )}
           <div className="table-wrap">
             <table>
               <thead>

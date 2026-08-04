@@ -8,6 +8,7 @@ export default async function AnalyticsPage() {
   const {
     series, bookings, conversions, activeBookingsCount,
     smsSentCount, smsPatientCount, conversionRate,
+    attributionDays, conversionsOutsideWindow,
   } = await getAnalyticsData(days);
 
   return (
@@ -27,6 +28,8 @@ export default async function AnalyticsPage() {
         initialSmsPatientCount={smsPatientCount}
         initialConversionRate={conversionRate}
         initialDays={days}
+        initialAttributionDays={attributionDays}
+        initialConversionsOutsideWindow={conversionsOutsideWindow}
       />
     </>
   );
