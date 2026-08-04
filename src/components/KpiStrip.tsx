@@ -316,7 +316,7 @@ function Modal({ type, onClose, onSmsSent }: {
                   </p>
                   {(p.smsCount ?? 0) > 0 && (
                     <p style={{ fontSize: 11, fontWeight: 600, color: "#2a7a68", marginTop: 3, letterSpacing: "0.01em" }}>
-                      {p.smsCount} SMS skickat{(p.smsCount ?? 0) !== 1 ? "e" : ""}
+                      {p.smsCount} SMS skicka{(p.smsCount ?? 0) !== 1 ? "de" : "t"}
                     </p>
                   )}
                 </div>

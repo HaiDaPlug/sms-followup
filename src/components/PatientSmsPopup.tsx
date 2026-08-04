@@ -64,7 +64,7 @@ export function PatientSmsPopup({ patientName, logs: initialLogs }: Props) {
         </div>
         {sentCount > 0 && (
           <div style={{ fontSize: 11, color: "var(--accent)", marginTop: 1, fontWeight: 600 }}>
-            {sentCount} SMS skickat{sentCount !== 1 ? "e" : ""}
+            {sentCount} SMS skicka{sentCount !== 1 ? "de" : "t"}
           </div>
         )}
       </button>
@@ -85,7 +85,7 @@ export function PatientSmsPopup({ patientName, logs: initialLogs }: Props) {
                   {patientName}
                 </div>
                 <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                  {sentCount} skickat{sentCount !== 1 ? "e" : ""} · {logs.length} loggpost{logs.length !== 1 ? "er" : ""}
+                  {sentCount} skicka{sentCount !== 1 ? "de" : "t"} · {logs.length} loggpost{logs.length !== 1 ? "er" : ""}
                 </div>
               </div>
               <button

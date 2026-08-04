@@ -262,7 +262,7 @@ function PatientCard({
           )}
           {row.sentCount > 0 && (
             <span style={{ fontSize: 10.5, fontWeight: 700, color: "#2a7a68", letterSpacing: "0.02em" }}>
-              {row.sentCount} skickat{row.sentCount !== 1 ? "e" : ""}
+              {row.sentCount} skicka{row.sentCount !== 1 ? "de" : "t"}
             </span>
           )}
           {row.failedCount > 0 && (
