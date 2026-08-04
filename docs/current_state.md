@@ -1,7 +1,7 @@
 # Current State - Clinic Rebooking Reminder System
 
-**Last updated:** 2026-06-12 (session 15 - SMS sequencing fix, 46elks delivery URL fix, debug UX improvements)
-**Phase:** Migrations 012–013 applied to production. SMS send flow working end-to-end. Migrations 014–017 still pending.
+**Last updated:** 2026-08-04 (session 16 - analytics correctness, attribution window, pg_cron scheduling, RLS)
+**Phase:** Migrations 001–021 applied to production. Deployed and building. Analytics page renders live data; conversion tracking is **not yet proven end-to-end** because no BokaDirekt webhook booking has ever been received.
 
 ---
 
@@ -15,7 +15,8 @@ A clinic rebooking engine built for Osteopaticentrum (Borås) that:
 5. Sends a 5-step SMS sequence — manually (next sequential step, bypassing day threshold) or via daily cron (highest threshold crossed)
 6. Reserves each SMS step before calling the provider, preventing concurrent duplicate sends
 7. Logs all activity and surfaces booking matches, failed SMS, and uncertain deliveries for review
-8. Lets staff schedule a specific SMS template for a specific patient at a future date/time, delivered by an independent 5-minute worker that atomically claims due jobs so it can never double-send or collide with the daily cron
+8. Lets staff schedule a specific SMS template for a specific patient at a future date/time, delivered by an independent 15-minute worker that atomically claims due jobs so it can never double-send or collide with the daily cron
+9. Reports on effectiveness — SMS sent, bookings received, and the subset of rebookings attributable to a preceding SMS within a selectable 30/60/90-day window
 
 One deployment per clinic. Supabase Auth gate in place.
 
@@ -24,11 +25,14 @@ One deployment per clinic. Supabase Auth gate in place.
 ## Infrastructure
 
 - **Next.js 15** App Router + TypeScript, React 19
-- **Supabase** (Stockholm region, project `updomqqgivylpunzuanw`) — migrations 001–011 applied
+- **Supabase** (Stockholm region, project `updomqqgivylpunzuanw`) — migrations 001–021 applied
 - **SMS**: 46elks adapter in `src/lib/sms/provider.ts` — virtual number +46766864658
 - **Auth**: Supabase Auth via `@supabase/ssr`. Middleware protects `/app/*` and `/api/*`. Cron + webhook routes use secret-based auth.
+- **RLS**: enabled on all nine application tables (migration 021). Writes and most reads use the service role, which bypasses RLS; the only anon-key data reader is the analytics page, covered by four `authenticated`-scoped SELECT policies. Verified 2026-08-04 that the anon key returns `42501 permission denied` on every table.
 - **Deployment**: Vercel, auto-deploys on push to `main`
-- **Cron**: Vercel cron at `0 8 * * *` → `/api/cron/daily-reminders`; separate cron at `*/5 * * * *` → `/api/cron/scheduled-sms` (⚠️ the 5-minute cadence requires Vercel Pro/Enterprise — Hobby will reject this schedule)
+- **Cron**:
+  - Vercel cron `0 8 * * *` → `/api/cron/daily-reminders` (daily; Hobby-compatible)
+  - Supabase `pg_cron` job `scheduled-sms-worker`, every 15 min → `pg_net` POST to `/api/cron/scheduled-sms`. Moved off Vercel cron because Hobby rejects sub-daily schedules at deploy time. Setup and verification queries in `docs/scheduled-sms-setup.md`.
 - **Testing**: `vitest` (`npm run test`) — see [Testing](#testing) section
 
 ---
@@ -48,7 +52,15 @@ One deployment per clinic. Supabase Auth gate in place.
 | `FORTYSIX_ELKS_VIRTUAL_NUMBER` | ⚠️ | ⚠️ | `+46766864658` — add to both |
 | `BOKADIREKT_WEBHOOK_SECRET` | ❌ | ❌ | Rotate the exposed old credential in BokaDirekt, then set the replacement in Vercel |
 | `TEST_SMS_TO` | ✅ | — | |
-| `CRON_SECRET` | ✅ | — | Set before public URL |
+| `CRON_SECRET` | ✅ | — | Must also be mirrored into the Supabase Vault as `cron_secret` — the scheduled-SMS worker is triggered by `pg_cron`, not Vercel |
+| `SMS_DELIVERY_WEBHOOK_SECRET` | ❓ | ❓ | Required for 46elks delivery receipts. Without it no delivery URL is sent to the provider **and** the webhook rejects every request, so logs stay at `sent` and never advance to `delivered`/`failed` |
+
+**Supabase Vault secrets** (separate from env vars, set once per project — see `docs/scheduled-sms-setup.md`):
+
+| Secret | Purpose |
+|---|---|
+| `app_base_url` | Deployed app base URL the `pg_cron` trigger posts to |
+| `cron_secret` | Must equal `CRON_SECRET`; sent as the bearer token |
 
 ---
 
@@ -63,8 +75,8 @@ One deployment per clinic. Supabase Auth gate in place.
 | `/app/review` | Working | Review queue — failed SMS, unknown deliveries, and pending booking matches |
 | `/app/settings` | Working | 5 editable SMS steps, dry-run toggle, emoji picker, char counter |
 | `/app/inbox` | Working | Incoming SMS from virtual number, inline reply |
-| `/app/analytics` | Working in code | Daily SMS/bookings chart with period totals, bookings table, SMS-matched bookings log, and 30/90/180/365-day selector |
-| `/app/scheduled-sms` | Working in code | Management table for scheduled SMS — status, scheduled time, resolved template, cancel action; shows snapshotted name/phone if the patient was later deleted |
+| `/app/analytics` | Working (renders live data) | Daily SMS/bookings chart, four stat tiles incl. conversion rate, bookings table, SMS-matched bookings log, 30/90/180/365-day period selector and a separate 30/60/90-day attribution picker. Conversion figures are **not yet proven** — see session 16 concerns |
+| `/app/scheduled-sms` | Working in code | Management table for scheduled SMS — status, scheduled time, resolved template, cancel action; shows snapshotted name/phone if the patient was later deleted. Delivery via `pg_cron` not yet verified against a live tick |
 
 ---
 
@@ -89,7 +101,7 @@ One deployment per clinic. Supabase Auth gate in place.
 | `POST /api/scheduled-sms` | Working in code | Creates a scheduled SMS; validates patient, hard-block eligibility, clinic timezone, future date, and sequence bounds server-side; freezes the rendered message at creation |
 | `GET /api/scheduled-sms` | Working in code | Lists scheduled SMS (capped at 250 rows, newest first) |
 | `DELETE /api/scheduled-sms/:id` | Working in code | Cancels only if still `pending`; returns 409 if already claimed/completed |
-| `GET /api/cron/scheduled-sms` | Working in code | Independent 5-minute worker — atomically claims due jobs and delivers them |
+| `GET /api/cron/scheduled-sms` | Working in code | Independent worker — atomically claims due jobs and delivers them. Triggered every 15 min by Supabase `pg_cron`, **not** by `vercel.json` |
 | `POST /api/webhooks/bokadirekt` | Working in code | Auto-applies deterministic matches; stages unmatched and conflicting identities for review |
 | `POST /api/webhooks/sms-incoming` | Working | 46elks incoming SMS → inbox |
 | `POST /api/webhooks/sms-delivery` | Working | 46elks delivery receipts |
@@ -142,7 +154,7 @@ Staff can schedule a specific SMS template for a specific patient at a future cl
 
 **Creation (`POST /api/scheduled-sms`):** server re-validates everything the client already checked — patient exists, hard-block eligibility (do not contact, missing phone, future booking, needs review, delivery pending, no valid booking), timezone must equal `Europe/Stockholm`, date must be in the future, `sequenceOverride` must be an integer within the resolved step range. The message is rendered from the template and frozen into `message_override` at creation time, along with a `patient_name`/`recipient_phone` snapshot — delivery never re-renders the template later.
 
-**Delivery (`GET/POST /api/cron/scheduled-sms`, every 5 minutes):**
+**Delivery (`GET/POST /api/cron/scheduled-sms`, every 15 minutes via Supabase `pg_cron`):**
 1. `claim_due_scheduled_sms` (migration 016) atomically claims due `pending` rows with `FOR UPDATE SKIP LOCKED`, flipping them to `processing` in the same statement — two concurrent workers cannot claim the same row.
 2. A crashed/orphaned `processing` row older than 30 minutes is auto-reconciled to `unknown` rather than retried.
 3. Eligibility hard blocks are rechecked at delivery time; soft blocks (`Waiting`/already `Sent`) are intentionally bypassed since an explicit schedule overrides normal cadence.
@@ -223,13 +235,18 @@ Migration 017 adds `sms_conversions` and the service-role-only `apply_bokadirekt
 | 010 | Change SMS step 2 from day 10 to day 14 |
 | 011 | Add `event_created_at` to bookings for analytics |
 
-**Applied in production:** 012, 013
+| 012 | `confirm_booking_match` RPC |
+| 013 | Outbox and cycle index; `resolve_delivery_unknown` |
+| 014 | Shared auto/manual booking RPC, deterministic identity safety, reassignment handling, cycle-reset transfer |
+| 015 | Scheduled SMS queue and scheduling fields |
+| 016 | Scheduled-send claiming, retries, delivery-state hardening |
+| 017 | SMS-match conversions, cancellation state, atomic auto-match wrapper |
+| 018 | Shared `log_sms_conversion` used by both auto and manual paths; `match_type` column; attribution window |
+| 019 | Widen conversion recording lookback to 365 days so attribution can be narrowed at read time |
+| 020 | `pg_cron` + `pg_net` trigger for the scheduled-SMS worker; Vault-backed config |
+| 021 | Enable RLS on all nine application tables; four `authenticated` SELECT policies; revoke blanket `anon` grants |
 
-**Pending migrations (apply in order before deploying):**
-- `014_bokadirekt_auto_apply_rpc.sql` - shared auto/manual booking RPC, deterministic identity safety, reassignment handling, and cycle-reset transfer
-- `015_scheduled_sms.sql` - scheduled SMS queue and scheduling fields
-- `016_scheduled_sms_hardening.sql` - scheduled-send claiming, retries, and delivery-state hardening
-- `017_sms_conversions.sql` - automatic SMS-match conversions, cancellation state, and atomic auto-match wrapper
+**Applied in production:** 001–021 (confirmed 2026-08-04).
 
 ---
 
@@ -389,18 +406,81 @@ Real concurrent-worker races and cancellation races still require a live Postgre
 
 ---
 
+## Session 16 — Analytics Correctness, Attribution Window, pg_cron, RLS
+
+### Analytics defects fixed
+
+- **1000-row PostgREST cap.** None of the four analytics queries set a range, so past 1000 rows results were silently truncated: chart counts and totals under-reported, and the patients lookup dropped names so the bookings table showed dashes at random. No error was raised. All four now page until a short page returns, capped at 50k rows. Each query also gained a stable `id` tiebreaker — without a total ordering, paged ranges can repeat or skip rows.
+- **Manual matches were never counted as conversions.** 017 logged conversions only on the deterministic webhook auto-match path, and permanently excluded anything that had ever been staged for review. That excluded precisely the rebookings a human had verified, biasing the metric toward clean data and under-reporting real effectiveness. 018 extracts a shared `log_sms_conversion` used by both paths and adds `match_type` (`auto`/`manual`) so the deterministic subset stays isolable.
+- **Unbounded attribution.** An SMS of any age could claim credit for a booking. Now bounded, and selectable.
+- **Read-time attribution window.** 018 froze the window at write time, so near-misses were lost and the window could not be changed retroactively. 019 widens recording to a 365-day lookback and the window (30/60/90) is applied at read time against `days_since_sms`. **Consequence:** `sms_conversions` is now a record of *candidates*, not of counted conversions — anything querying it directly must apply its own filter.
+- **Conversion rate added**, computed on distinct patients (three sequence steps to one person is one customer, not three) and intersected with the SMS'd set so the rate cannot exceed 100%. Renders `—` rather than `0 %` when no SMS went out in the window.
+- **Superseded requests cancelled** via `AbortController` — a slow 365-day load could previously land after and overwrite a 30-day one requested afterwards.
+- **`sent_at` no longer overwritten by delivery receipts** — a delayed receipt could shift which day an SMS bucketed into and corrupt `days_since_sms`.
+
+### Infrastructure
+
+- **Scheduled-SMS trigger moved from Vercel cron to Supabase `pg_cron` + `pg_net`** (migration 020). The `*/5` Vercel cron is rejected on Hobby at deploy time, which made a core feature depend on a paid plan. No application code changed — all correctness (atomic claiming, stuck-row recovery, attempt counting) already lived in Postgres; Vercel's cron was only a heartbeat. `pg_net` posts to the existing route rather than the database calling 46elks directly, keeping the third-party boundary out of the data layer. Secrets come from Vault, never the migration.
+- **RLS enabled on all nine tables** (migration 021). Four `authenticated`-scoped SELECT policies cover the analytics reader; no write policies anywhere, since all writes go through the service role. Blanket `anon` grants revoked as defence in depth.
+- **Build fix:** `readStoreForUi` moved out of the `repository.ts` re-export barrel into its own module. Declaring a value export alongside re-exports made Next drop it for importers resolving through the barrel — `next build` failed while `tsc --noEmit` accepted it.
+
+### Verified
+
+- Anon key returns `42501 permission denied` on all nine tables (was returning live patient names before 021).
+- `/app/analytics` renders live data post-RLS; 41 unit tests, typecheck, and `next build` all pass.
+
+### Concerns and known gaps
+
+- **Conversion tracking is unproven end-to-end.** There are 4,715 bookings, all from the 2026-05-07 CSV import, and **zero** with `event_created_at` — no BokaDirekt webhook booking has ever been received. `sms_conversions` is empty. The pipeline is therefore untested against real data, and "SMS-matchade: 0" is expected rather than informative until webhooks are wired.
+- **Analytics zeros are currently correct, not a fault.** All bookings bucket to the single 2026-05-07 import date, so any window shorter than ~90 days shows `Bokningar: 0`. Selecting 365 days should surface them as one spike. Worth re-checking once webhook bookings start arriving.
+- **No conversions backfill.** 018/019 only affect rows written after they were applied; conversions skipped under the earlier 90-day write-time rule were never stored and cannot be recovered.
+- **Attribution semantics are last-touch.** The most recent qualifying SMS gets credit. If the question becomes "which sequence step converts", that is a different query and the current data answers it only for the last step sent.
+- **Migration 020/021 SQL was never executed locally** — no local Postgres — so it was verified by review and by post-apply checks against production, not by a test run.
+- **`pg_net` does not retry.** Safe by design (the queue is the source of truth, so a missed tick delays rather than drops), but it means scheduled-SMS delivery has no independent alerting if the trigger silently stops firing.
+- **The pg_cron schedule now lives in the database, not `vercel.json`** — it will not be visible when reading repo config. See `docs/scheduled-sms-setup.md`.
+- **Anon key not yet rotated.** It was unrestricted for the life of the project, so it should be treated as compromised; 021 protects going forward but not against data already captured.
+
+### Testing gaps to close
+
+- Analytics has **no integration test** — `getAnalyticsData` imports `server-only` and calls Supabase directly, and the existing mock does not support `.or()`, `.in()`, `.gte()`, `.order()`, or terminal `await` on the builder. Only the extracted pure helpers (`dayKeys`, `conversionRate`, `attributionWindow`) are covered.
+- The **scheduled-SMS claim path has no test against a real database.** `claim_due_scheduled_sms` concurrency (`FOR UPDATE SKIP LOCKED`) is the highest-risk untested code in the app — a bug there means duplicate SMS to real customers.
+- **No test covers the RLS policies themselves.** The curl check proves the `anon` revoke works, but the `authenticated` read path is verified only by loading the page.
+- **`log_sms_conversion` is untested** in both its auto and manual call paths.
+
+---
+
 ## What Still Needs to Be Done
 
-- [ ] Apply migrations 014 through 017 to production Supabase in numeric order
+### Blocking / highest value
+
+- [ ] **Wire and test the BokaDirekt webhook.** Nothing has ever been received (`event_created_at` null on all 4,715 bookings), so conversion tracking is entirely unproven. Until this fires, "SMS-matchade" stays 0 regardless of real-world results.
+- [ ] **Test the Supabase `pg_cron` scheduled-SMS job end-to-end.** Never verified against a live tick. Steps:
+  - [ ] Confirm both Vault secrets exist: `select name from vault.secrets where name in ('app_base_url','cron_secret');`
+  - [ ] Confirm the job is registered and active: `select jobname, schedule, active from cron.job where jobname = 'scheduled-sms-worker';`
+  - [ ] Fire it manually and check for an error: `select public.trigger_scheduled_sms();`
+  - [ ] Check run history: `select status, return_message, start_time from cron.job_run_details where jobid = (select jobid from cron.job where jobname = 'scheduled-sms-worker') order by start_time desc limit 10;`
+  - [ ] Schedule a real SMS a few minutes out and confirm it moves `pending → processing → sent` within ~15 minutes
+  - [ ] Confirm the empty-tick short-circuit works — a tick with no due rows should make **no** HTTP call (no corresponding Vercel function invocation)
+  - [ ] Confirm the route rejects an unauthenticated call (wrong/missing bearer → 401)
+- [ ] **Compare conversions against reality** — ask the clinic whether any of the 30 messaged customers actually rebooked, and reconcile against what the app reports. This is the only way to distinguish "SMS aren't working" from "tracking isn't capturing it".
+- [ ] **Rotate the Supabase anon key** and update Vercel + `.env.local`. It was unrestricted for the project's life.
 - [ ] Rotate the exposed BokaDirekt webhook secret in BokaDirekt and set the replacement as `BOKADIREKT_WEBHOOK_SECRET` in Vercel
-- [ ] Set `CRON_SECRET` in Vercel
+- [ ] Set `CRON_SECRET` in Vercel, and confirm the Vault `cron_secret` matches it
+- [ ] Confirm `SMS_DELIVERY_WEBHOOK_SECRET` is set in Vercel — without it, delivery receipts silently never arrive and logs stay at `sent`
+
+### Analytics QA (post-migration)
 - [ ] Run development webhook smoke tests: ID match, phone match, email match, conflict, unknown customer, retry, reassignment, and cancellation
 - [ ] Smoke test the session 12 fixes specifically: concurrent cancellation vs. update/create for the same booking (no interleaving), a manual confirm where the selected candidate has a different `bokadirekt_customer_id` than the raw booking (should raise, not silently overwrite), and a cancellation payload missing `Customer.Id`
 - [ ] Smoke test analytics conversion cases: prior SMS + automatic match creates one row; no prior SMS creates none; manual confirmation followed by BookingUpdated stays excluded; duplicate retries remain idempotent; cancellation removes the conversion from metrics
 - [ ] Verify 30/90/180/365-day analytics totals, zero-filled days, Stockholm boundaries, cancelled-booking counts, and responsive lower-panel stacking against development data
+- [ ] Verify the attribution picker (30/60/90 d): narrowing must make the count **drop or hold, never rise**; the rate tile label must follow the selection
+- [ ] Verify pagination past 1000 rows — patient names must not go missing in the bookings table once any query exceeds a single page
+- [ ] Confirm a manual review confirmation now logs a conversion with `match_type = 'manual'` (the systematic undercount fixed in 018)
+- [ ] Confirm cancelling a booking drops its conversion from the metric but leaves the booking visible in the table as "Avbokad" (deliberate asymmetry)
 - [ ] Test stale pending resolution against the deployed database/provider flow
-- [ ] Upgrade to Vercel Pro/Enterprise (or reduce cadence) before deploying — the `*/5 * * * *` scheduled-SMS cron is rejected on Hobby
 - [ ] Exercise real concurrent-worker claiming and cancellation races against staging Supabase before enabling scheduled-SMS provider delivery in production
+- [ ] Add an integration test for `getAnalyticsData` — needs the Supabase mock extended to support `.or()`, `.in()`, `.gte()`, `.order()`, and terminal `await`
+- [ ] Add coverage for `log_sms_conversion` on both the auto and manual paths
 - [ ] Multi-tenant portal (clinic_id on all tables, per-clinic isolated data)
 - [ ] Domain decision
 
@@ -412,6 +492,11 @@ Real concurrent-worker races and cancellation races still require a live Postgre
 
 - `src/lib/storage/store.test.ts` — scheduled-SMS cancel/complete/claim conditional-update guarantees
 - `src/lib/reminders/process.test.ts` — scheduled-SMS delivery outcome mapping (skipped/dry-run/unknown)
+- `src/lib/analytics/dayKeys.test.ts` — Stockholm day bucketing and window boundaries across both 2026 DST transitions; the UTC-noon anchor producing strictly consecutive days
+- `src/lib/analytics/conversionRate.test.ts` — distinct-patient counting, null vs. 0 %, and the intersection that keeps the rate ≤ 100 %
+- `src/lib/analytics/attributionWindow.test.ts` — exclusive upper bound, untrusted query-param parsing, and the monotonicity property that makes the window safe to change retroactively
+
+**41 tests across 5 files.** Note the shape of this coverage: it is all *pure functions*. Nothing exercises a real database, a real HTTP call, or the RLS policies — see "Testing gaps to close" in session 16.
 
 `src/test/mockSupabase.ts` provides a small reusable chainable Supabase mock for tests that need to assert on `.eq()`/`.update()` call arguments without a live database.
 
@@ -421,4 +506,6 @@ Real concurrent-worker races and cancellation races still require a live Postgre
 
 - Supabase project: `https://supabase.com/dashboard/project/updomqqgivylpunzuanw`
 - GitHub repo: `https://github.com/HaiDaPlug/sms-followup`
+- Scheduled-SMS `pg_cron` setup and verification queries: `docs/scheduled-sms-setup.md`
+- RLS rollout, verification and rollback: `docs/rls-rollout.md`
 - Webhook payload confirmed: `docs/` — see session 9 conversation
