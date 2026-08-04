@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { processScheduledSms } from "@/lib/reminders/process";
 
+// Triggered by the Supabase pg_cron job "scheduled-sms-worker" (migration 020),
+// NOT by vercel.json — Vercel's Hobby plan rejects sub-daily crons at deploy
+// time, and a scheduled send needs a tick every few minutes to be meaningful.
+// See docs/scheduled-sms-setup.md for the Vault secrets the trigger requires.
+
 function authorized(request: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
