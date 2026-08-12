@@ -49,16 +49,11 @@ const navItems = [
       </svg>
     )
   },
-  {
-    href: "/app/inbox",
-    label: "Inkorg",
-    icon: (
-      <svg className="nav-icon" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={1.75}>
-        <path d="M2 3h12a1 1 0 011 1v7a1 1 0 01-1 1H5l-3 2V4a1 1 0 011-1z" strokeLinejoin="round" />
-        <path d="M5 7h6M5 9.5h4" strokeLinecap="round" />
-      </svg>
-    )
-  },
+  // Inkorg (/app/inbox) is deliberately absent. Production sends from the
+  // alphanumeric sender ID "OsteopatiC", which cannot receive replies, so the
+  // inbox no longer reflects a working reply loop. The route, its data and the
+  // incoming webhook all still run -- restore this entry if the sender ID goes
+  // back to a number. See docs/current_state.md.
   {
     href: "/app/analytics",
     label: "Analys",
@@ -160,7 +155,7 @@ export function AppSidebar() {
       </nav>
       <div className="sidebar-footer" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <LogoutButton />
-        <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.3)", paddingLeft: 10 }}>Osteopaticentrum · Borås</div>
+        <div style={{ fontSize: 14, color: "rgba(255,255,255,0.3)", paddingLeft: 10 }}>Osteopaticentrum · Borås</div>
       </div>
     </aside>
   );

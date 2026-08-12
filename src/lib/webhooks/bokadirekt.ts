@@ -304,11 +304,13 @@ function bookingRpcParams(booking: BokaDirektPayload, patientId: string | null) 
 }
 
 async function applyBookingToPatient(booking: BokaDirektPayload, patientId: string) {
-  // Deterministic webhook auto-apply path only: this wrapper RPC (migration
-  // 017) calls apply_bokadirekt_booking and logs an SMS-conversion in the
-  // same transaction. Manual review confirmations go through
-  // confirmBookingMatch below, which calls plain apply_bokadirekt_booking
-  // directly and never logs a conversion.
+  // Deterministic webhook auto-apply path: this wrapper RPC calls
+  // apply_bokadirekt_booking and logs an SMS-conversion in the same
+  // transaction. Since migration 018 both paths log through the shared
+  // log_sms_conversion() and are distinguished by match_type -- 'auto' here,
+  // 'manual' from confirmBookingMatch below. 017's rule that a booking which
+  // ever entered review could never count is gone; it excluded precisely the
+  // rebookings a human had verified.
   const { data: resolvedPatientId, error } = await supabase.rpc(
     "apply_bokadirekt_booking_auto_matched",
     bookingRpcParams(booking, patientId)

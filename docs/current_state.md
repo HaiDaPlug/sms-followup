@@ -1,7 +1,7 @@
 # Current State - Clinic Rebooking Reminder System
 
-**Last updated:** 2026-08-04 (session 16 - analytics correctness, attribution window, pg_cron scheduling, RLS)
-**Phase:** Migrations 001–021 applied to production. Deployed and building. Analytics page renders live data; conversion tracking is **not yet proven end-to-end** because no BokaDirekt webhook booking has ever been received.
+**Last updated:** 2026-08-12 (session 17 - credential rotation; session 16 - analytics correctness, attribution window, pg_cron scheduling, RLS, Supabase key naming)
+**Phase:** Migrations 001–021 applied to production, including 020 (pg_cron) and 021 (RLS). Deployed and building. Analytics page renders live data; conversion tracking is **not yet proven end-to-end** because no BokaDirekt webhook booking has ever been received. Supabase key rotation is mid-cutover: new publishable/secret keys are set and verified locally, but **Vercel still has only the legacy keys** — see the env table and `docs/supabase-key-rotation.md`.
 
 ---
 
@@ -42,18 +42,33 @@ One deployment per clinic. Supabase Auth gate in place.
 | Variable | Local | Vercel | Notes |
 |---|---|---|---|
 | `SUPABASE_URL` | ✅ | ✅ | |
-| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | ✅ | |
+| `SUPABASE_SECRET_KEY` | ✅ | ❌ | Set locally 2026-08-12 and now winning the resolver. Verified: reads `patients` (200), i.e. still bypasses RLS like the old `service_role` |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | ✅ | Legacy, still live and still the only thing Vercel has. Remove from both **after** Vercel gets the new key and is verified — step 6 of `docs/supabase-key-rotation.md` |
 | `NEXT_PUBLIC_SUPABASE_URL` | ✅ | ✅ | |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | ✅ | |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | ✅ | ❌ | Set locally 2026-08-12 and now winning the resolver. Verified: authenticates (200) **and** is correctly locked out of `patients` by RLS (`42501`), so it is no more privileged than the old anon key |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | ✅ | Legacy, still live. Remove after the cutover. Note this one needs a **redeploy** to take effect in Vercel — `NEXT_PUBLIC_*` is inlined at build time |
 | `SMS_PROVIDER` | ✅ | ✅ | `46elks` |
 | `FORTYSIX_ELKS_USERNAME` | ✅ | ✅ | |
-| `FORTYSIX_ELKS_PASSWORD` | ✅ | ✅ | |
-| `FORTYSIX_ELKS_FROM` | ✅ | ✅ | `OsteopatiC` |
-| `FORTYSIX_ELKS_VIRTUAL_NUMBER` | ⚠️ | ⚠️ | `+46766864658` — add to both |
-| `BOKADIREKT_WEBHOOK_SECRET` | ❌ | ❌ | Rotate the exposed old credential in BokaDirekt, then set the replacement in Vercel |
+| `FORTYSIX_ELKS_PASSWORD` | ✅ | ⚠️ | **Rotated 2026-08-12.** New value verified working (200); old value verified dead (401). Vercel must be updated with the new value or every production send fails auth |
+| `FORTYSIX_ELKS_FROM` | ✅ | ✅ | `OsteopatiC` in both since 2026-08-12 (local was the virtual number until then). Alphanumeric by deliberate choice: 10 chars, within 46elks' 11-char limit. **Patients cannot reply to an alphanumeric sender** — this is why `/app/inbox` is retired from the nav. Changing it back to a number means restoring that nav entry |
+| `FORTYSIX_ELKS_VIRTUAL_NUMBER` | ✅ | ⚠️ | `+46766864658` — verified present locally 2026-08-12; still confirm in Vercel |
+| `BOKADIREKT_WEBHOOK_SECRET` | ❌ | ❌ | Verified absent locally 2026-08-12. The route fails closed, so **every** BokaDirekt webhook is rejected with 401 until this is set. Rotate the exposed old credential in BokaDirekt, then set the replacement in Vercel |
 | `TEST_SMS_TO` | ✅ | — | |
 | `CRON_SECRET` | ✅ | — | Must also be mirrored into the Supabase Vault as `cron_secret` — the scheduled-SMS worker is triggered by `pg_cron`, not Vercel |
-| `SMS_DELIVERY_WEBHOOK_SECRET` | ❓ | ❓ | Required for 46elks delivery receipts. Without it no delivery URL is sent to the provider **and** the webhook rejects every request, so logs stay at `sent` and never advance to `delivered`/`failed` |
+| `SMS_DELIVERY_WEBHOOK_SECRET` | ❌ | ❓ | Verified absent locally 2026-08-12. Required for 46elks delivery receipts. Without it no delivery URL is sent to the provider **and** the webhook rejects every request, so logs stay at `sent` and never advance to `delivered`/`failed` |
+| `SUPABASE_DB_PASSWORD` | ✅ | — | **Rotated 2026-08-12.** Supabase CLI only; not read by app code. Re-link the CLI if it prompts |
+
+**Credential rotation (2026-08-12).** All credentials present in `.env.local` at the start of session 17 were treated as exposed and rotated. Verified blind — values were never printed, only derived facts:
+
+| Credential | State |
+|---|---|
+| 46elks password | Rotated. New value 200, old value confirmed dead (401) |
+| Supabase publishable + secret keys | Created, set locally, both winning the resolver. Secret reads `patients` (200); publishable authenticates (200) and is correctly blocked by RLS (`42501`) |
+| Supabase DB password | Rotated |
+| `CRON_SECRET`, `BOKADIREKT_WEBHOOK_SECRET`, `SMS_DELIVERY_WEBHOOK_SECRET` | Regenerated locally (40 chars each). The latter two were previously unset entirely |
+| Legacy Supabase JWTs | Still live and still the only keys Vercel has. Deliberate — they are the rollback path until Vercel is cut over |
+
+`next build` passes against the new keys. **Local is fully rotated; Vercel is not.** Until the values are copied across, production still runs on the old 46elks password (every send fails auth) and the legacy Supabase keys.
 
 **Supabase Vault secrets** (separate from env vars, set once per project — see `docs/scheduled-sms-setup.md`):
 
@@ -74,7 +89,7 @@ One deployment per clinic. Supabase Auth gate in place.
 | `/app/import` | Working | CSV upload, idempotent |
 | `/app/review` | Working | Review queue — failed SMS, unknown deliveries, and pending booking matches |
 | `/app/settings` | Working | 5 editable SMS steps, dry-run toggle, emoji picker, char counter |
-| `/app/inbox` | Working | Incoming SMS from virtual number, inline reply |
+| `/app/inbox` | **Retired from nav** (2026-08-12) | Still works if reached by URL; the incoming webhook and the 14 stored messages are untouched. Removed from the sidebar because production sends from the alphanumeric sender ID `OsteopatiC`, which cannot receive replies — so the page no longer represents a working reply loop. Restore the entry in `AppSidebar.tsx` if the sender goes back to a number |
 | `/app/analytics` | Working (renders live data) | Daily SMS/bookings chart, four stat tiles incl. conversion rate, bookings table, SMS-matched bookings log, 30/90/180/365-day period selector and a separate 30/60/90-day attribution picker. Conversion figures are **not yet proven** — see session 16 concerns |
 | `/app/scheduled-sms` | Working in code | Management table for scheduled SMS — status, scheduled time, resolved template, cancel action; shows snapshotted name/phone if the patient was later deleted. Delivery via `pg_cron` not yet verified against a live tick |
 
@@ -215,7 +230,12 @@ The analytics page now reports activity by the day it entered the system, regard
 - The lower panels show booking-recorded and appointment dates on the left, and deterministic SMS-matched bookings on the right.
 - Query failures are surfaced instead of silently appearing as zero metrics; period refresh failures preserve the current UI data.
 
-Migration 017 adds `sms_conversions` and the service-role-only `apply_bokadirekt_booking_auto_matched` wrapper. The wrapper calls migration 014's booking mutation and records an eligible conversion in the same PostgreSQL transaction. Only webhook matches that never entered `pending_booking_match` review qualify; manual confirmations remain excluded even if a later BookingUpdated event becomes deterministically matchable. The latest sent/delivered SMS before the booking-recorded timestamp qualifies, with no attribution-window cap. Duplicate webhook deliveries are idempotent by BokaDirekt booking ID. Cancellation marks the conversion cancelled in the same advisory-locked transaction.
+Migration 017 adds `sms_conversions` and the service-role-only `apply_bokadirekt_booking_auto_matched` wrapper, which calls migration 014's booking mutation and records an eligible conversion in the same PostgreSQL transaction. Migrations 018 and 019 then changed the recording rules:
+
+- **Both paths count.** 018 extracts a shared `log_sms_conversion()` called by the webhook auto-match (`match_type = 'auto'`) and by `confirm_booking_match` (`'manual'`). 017's rule that a booking which ever entered `pending_booking_match` review could never count is gone — it excluded precisely the rebookings a human had verified.
+- **The attribution window is applied at read time.** Recording uses a wide 365-day lookback (019); the 30/60/90-day window is applied against `days_since_sms` in `attributionWindow.ts`. `sms_conversions` is therefore a record of *candidates*, not of counted conversions — anything querying it directly must apply its own filter.
+
+The latest sent/delivered SMS strictly before the booking-recorded timestamp qualifies. Duplicate webhook deliveries are idempotent by BokaDirekt booking ID. Cancellation marks the conversion cancelled in the same advisory-locked transaction.
 
 
 ---
@@ -423,6 +443,7 @@ Real concurrent-worker races and cancellation races still require a live Postgre
 - **Scheduled-SMS trigger moved from Vercel cron to Supabase `pg_cron` + `pg_net`** (migration 020). The `*/5` Vercel cron is rejected on Hobby at deploy time, which made a core feature depend on a paid plan. No application code changed — all correctness (atomic claiming, stuck-row recovery, attempt counting) already lived in Postgres; Vercel's cron was only a heartbeat. `pg_net` posts to the existing route rather than the database calling 46elks directly, keeping the third-party boundary out of the data layer. Secrets come from Vault, never the migration.
 - **RLS enabled on all nine tables** (migration 021). Four `authenticated`-scoped SELECT policies cover the analytics reader; no write policies anywhere, since all writes go through the service role. Blanket `anon` grants revoked as defence in depth.
 - **Build fix:** `readStoreForUi` moved out of the `repository.ts` re-export barrel into its own module. Declaring a value export alongside re-exports made Next drop it for importers resolving through the barrel — `next build` failed while `tsc --noEmit` accepted it.
+- **Supabase key naming.** Key resolution moved into `src/lib/supabase/keys.ts`, reading the new publishable/secret names first and falling back to the legacy anon/service_role ones. This makes the rename and the value rotation separate, individually reversible steps — as of session 16 the code shipped with no values swapped, so the legacy keys stayed in use via the fallback. (Session 17 then set the new values locally; see the env table for current state.) The `NEXT_PUBLIC_*` names are written longhand because Next.js inlines them at build time by literal textual match; a dynamic lookup silently resolves to `undefined` in the browser. Verified the key is present in the built client bundle. Cutover order in `docs/supabase-key-rotation.md`.
 
 ### Verified
 
@@ -463,7 +484,11 @@ Real concurrent-worker races and cancellation races still require a live Postgre
   - [ ] Confirm the empty-tick short-circuit works — a tick with no due rows should make **no** HTTP call (no corresponding Vercel function invocation)
   - [ ] Confirm the route rejects an unauthenticated call (wrong/missing bearer → 401)
 - [ ] **Compare conversions against reality** — ask the clinic whether any of the 30 messaged customers actually rebooked, and reconcile against what the app reports. This is the only way to distinguish "SMS aren't working" from "tracking isn't capturing it".
-- [ ] **Rotate the Supabase anon key** and update Vercel + `.env.local`. It was unrestricted for the project's life.
+- [ ] **Finish the Supabase key cutover in Vercel.** New keys are set and verified locally; Vercel still has only the legacy ones. Remaining steps from `docs/supabase-key-rotation.md`:
+  - [ ] Set `SUPABASE_SECRET_KEY` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in Vercel, keeping the legacy vars in place
+  - [ ] **Redeploy** — `NEXT_PUBLIC_*` is inlined at build time, so setting it without redeploying changes nothing
+  - [ ] **Test an actual write in production** (CSV import or a settings edit), not just page loads — every write path assumes the server key bypasses RLS
+  - [ ] Remove the legacy vars from Vercel, redeploy, then disable the legacy keys in Supabase (irreversible — do it last)
 - [ ] Rotate the exposed BokaDirekt webhook secret in BokaDirekt and set the replacement as `BOKADIREKT_WEBHOOK_SECRET` in Vercel
 - [ ] Set `CRON_SECRET` in Vercel, and confirm the Vault `cron_secret` matches it
 - [ ] Confirm `SMS_DELIVERY_WEBHOOK_SECRET` is set in Vercel — without it, delivery receipts silently never arrive and logs stay at `sent`
