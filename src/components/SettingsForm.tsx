@@ -108,7 +108,7 @@ function SmsCounter({ template }: { template: string }) {
         alignItems: "center",
         flexWrap: "wrap",
         gap: 8,
-        fontSize: 11.5,
+        fontSize: 14,
         color: isUcs2 ? "var(--amber)" : "var(--text-muted)",
         fontVariantNumeric: "tabular-nums",
       }}>
@@ -129,19 +129,19 @@ function SmsCounter({ template }: { template: string }) {
             borderRadius: 3,
             padding: "1px 6px",
             fontWeight: 700,
-            fontSize: 10.5,
+            fontSize: 12,
           }}>
             UCS-2 · max {parts === 1 ? 70 : 67}/del
           </span>
         )}
       </div>
       {isUcs2 && rawOffender && (
-        <div style={{ fontSize: 11, color: "var(--amber)", opacity: 0.85 }}>
+        <div style={{ fontSize: 12, color: "var(--amber)", opacity: 0.85 }}>
           Orsakas av: &ldquo;{rawOffender}&rdquo; — inte ett GSM-7-tecken
         </div>
       )}
       {isUcs2 && !rawOffender && firstOffender && (
-        <div style={{ fontSize: 11, color: "var(--amber)", opacity: 0.85 }}>
+        <div style={{ fontSize: 12, color: "var(--amber)", opacity: 0.85 }}>
           Orsakas av exempelvärde: &ldquo;{firstOffender}&rdquo;
         </div>
       )}
@@ -152,10 +152,10 @@ function SmsCounter({ template }: { template: string }) {
 function SectionHeader({ title, description }: { title: string; description: string }) {
   return (
     <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 18, marginBottom: 6 }}>
-      <div style={{ fontFamily: "var(--font-head)", fontSize: 15, fontWeight: 700, color: "var(--text)", marginBottom: 3 }}>
+      <div style={{ fontFamily: "var(--font-head)", fontSize: 19, fontWeight: 700, color: "var(--text)", marginBottom: 3 }}>
         {title}
       </div>
-      <div style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>{description}</div>
+      <div style={{ fontSize: 14, color: "var(--text-muted)", lineHeight: 1.5 }}>{description}</div>
     </div>
   );
 }
@@ -188,7 +188,7 @@ function DayChip({ value, onChange }: { value: number; onChange: (v: number) => 
     display: "inline-flex",
     alignItems: "center",
     gap: 4,
-    fontSize: 11,
+    fontSize: 14,
     fontWeight: 700,
     letterSpacing: "0.05em",
     textTransform: "uppercase",
@@ -219,7 +219,7 @@ function DayChip({ value, onChange }: { value: number; onChange: (v: number) => 
             border: "none",
             background: "transparent",
             font: "inherit",
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: 700,
             color: "var(--text)",
             outline: "none",
@@ -279,7 +279,7 @@ function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
           border: "1px solid var(--border)",
           borderRadius: "var(--radius-sm)",
           padding: "3px 8px",
-          fontSize: 15,
+          fontSize: 19,
           cursor: "pointer",
           lineHeight: 1,
           minHeight: "unset",
@@ -311,7 +311,7 @@ function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
             style={{
               width: "100%",
               marginBottom: 8,
-              fontSize: 12,
+              fontSize: 14,
               padding: "5px 8px",
               borderRadius: "var(--radius-sm)",
               border: "1px solid var(--border)",
@@ -331,7 +331,7 @@ function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
                   onClick={() => setTab(i)}
                   style={{
                     flex: 1,
-                    fontSize: 11,
+                    fontSize: 12,
                     fontWeight: tab === i ? 700 : 400,
                     padding: "3px 0",
                     border: "none",
@@ -351,7 +351,7 @@ function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
 
           {/* Grid */}
           {visibleEmojis.length === 0 ? (
-            <div style={{ fontSize: 12, color: "var(--text-muted)", textAlign: "center", padding: "10px 0" }}>
+            <div style={{ fontSize: 14, color: "var(--text-muted)", textAlign: "center", padding: "10px 0" }}>
               Inga träffar
             </div>
           ) : (
@@ -362,7 +362,7 @@ function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
                   type="button"
                   onClick={() => onPick(emoji)}
                   style={{
-                    fontSize: 18,
+                    fontSize: 19,
                     lineHeight: 1,
                     padding: "4px 2px",
                     border: "none",
@@ -424,7 +424,7 @@ function StepCard({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-muted)" }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)" }}>
           SMS {index + 1} —
         </span>
         <DayChip value={step.day} onChange={(day) => onChange({ ...step, day })} />
@@ -435,7 +435,7 @@ function StepCard({
             onClick={onRemove}
             style={{
               marginLeft: "auto",
-              fontSize: 11,
+              fontSize: 12,
               padding: "2px 9px",
               minHeight: "unset",
               color: "var(--text-muted)",
@@ -460,7 +460,7 @@ function StepCard({
         border: "1px solid var(--border)",
         borderRadius: "var(--radius-sm)",
         padding: "7px 11px",
-        fontSize: 11.5,
+        fontSize: 14,
         color: "var(--text-muted)",
         letterSpacing: "0.02em",
         fontFamily: "ui-monospace, monospace",
@@ -622,7 +622,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
           type="button"
           className="secondary"
           onClick={addStep}
-          style={{ alignSelf: "flex-start", fontSize: 12.5 }}
+          style={{ alignSelf: "flex-start", fontSize: 14 }}
         >
           + Lägg till steg
         </button>
@@ -655,8 +655,8 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
         }}>
           <input defaultChecked={settings.is_active} name="is_active" type="checkbox" style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }} />
           <div>
-            <div style={{ fontWeight: 600, fontSize: 13.5, color: "var(--text)" }}>Aktivera automatiska påminnelser</div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Daglig körning sker klockan {sendTime} om detta är aktiverat.</div>
+            <div style={{ fontWeight: 600, fontSize: 16, color: "var(--text)" }}>Aktivera automatiska påminnelser</div>
+            <div style={{ fontSize: 14, color: "var(--text-muted)", marginTop: 2 }}>Daglig körning sker klockan {sendTime} om detta är aktiverat.</div>
           </div>
         </label>
 
@@ -679,10 +679,10 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
             style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }}
           />
           <div>
-            <div style={{ fontWeight: 600, fontSize: 13.5, color: dryRun ? "var(--amber)" : "var(--text)" }}>
+            <div style={{ fontWeight: 600, fontSize: 16, color: dryRun ? "var(--amber)" : "var(--text)" }}>
               {dryRun ? "Testläge aktiverat" : "Testläge avaktiverat"}
             </div>
-            <div style={{ fontSize: 12, color: dryRun ? "var(--amber)" : "var(--text-muted)", opacity: 0.85, marginTop: 2 }}>
+            <div style={{ fontSize: 14, color: dryRun ? "var(--amber)" : "var(--text-muted)", opacity: 0.85, marginTop: 2 }}>
               {dryRun ? "SMS loggas men skickas inte. Avaktivera när du är redo att skicka på riktigt." : "SMS skickas på riktigt. Aktivera testläget igen om du vill simulera."}
             </div>
           </div>
@@ -707,10 +707,10 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
             style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }}
           />
           <div>
-            <div style={{ fontWeight: 600, fontSize: 13.5, color: sameNumberOverride ? "var(--red)" : "var(--text)" }}>
+            <div style={{ fontWeight: 600, fontSize: 16, color: sameNumberOverride ? "var(--red)" : "var(--text)" }}>
               Tillåt test-SMS till samma nummer
             </div>
-            <div style={{ fontSize: 12, color: sameNumberOverride ? "var(--red)" : "var(--text-muted)", opacity: 0.85, marginTop: 2 }}>
+            <div style={{ fontSize: 14, color: sameNumberOverride ? "var(--red)" : "var(--text-muted)", opacity: 0.85, marginTop: 2 }}>
               {sameNumberOverride
                 ? "Dubbel-skyddet är avstängt — SMS skickas även om sekvensen redan slutförts. Bara för testning av eget nummer."
                 : "Dubbel-skyddet är aktivt. Aktivera för att skicka SMS till ett nummer som redan fått hela sekvensen."}
@@ -728,7 +728,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
             </button>
           )}
           {message && (
-            <span style={{ fontSize: 13, color: messageType === "ok" ? "var(--accent)" : "var(--red)", fontWeight: 500 }}>
+            <span style={{ fontSize: 14, color: messageType === "ok" ? "var(--accent)" : "var(--red)", fontWeight: 500 }}>
               {message}
             </span>
           )}

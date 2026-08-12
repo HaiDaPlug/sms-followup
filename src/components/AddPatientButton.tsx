@@ -89,7 +89,7 @@ export function AddPatientButton() {
               alignItems: "center",
               justifyContent: "space-between",
             }}>
-              <span style={{ fontWeight: 700, fontSize: 15, color: "#fff", letterSpacing: "-0.01em" }}>
+              <span style={{ fontWeight: 700, fontSize: 19, color: "#fff", letterSpacing: "-0.01em" }}>
                 Lägg till patient
               </span>
               <button
@@ -99,7 +99,7 @@ export function AddPatientButton() {
                   border: "1px solid rgba(255,255,255,0.18)",
                   borderRadius: 6,
                   color: "rgba(255,255,255,0.8)",
-                  fontSize: 16,
+                  fontSize: 19,
                   lineHeight: 1,
                   padding: "3px 8px",
                   cursor: "pointer",
@@ -113,7 +113,7 @@ export function AddPatientButton() {
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                 {FIELDS.map((field, i) => (
                   <label key={field.name} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
                       {field.label}{field.required && <span style={{ color: "var(--red)", marginLeft: 2 }}>*</span>}
                     </span>
                     <input
@@ -127,7 +127,7 @@ export function AddPatientButton() {
                         borderRadius: "var(--radius-sm)",
                         background: "var(--surface-sub)",
                         color: "var(--text)",
-                        fontSize: 13,
+                        fontSize: 14,
                         padding: "8px 11px",
                         outline: "none",
                         width: "100%",
@@ -139,7 +139,7 @@ export function AddPatientButton() {
               </div>
 
               {error && (
-                <p style={{ marginTop: 12, fontSize: 12.5, color: "var(--red)" }}>{error}</p>
+                <p style={{ marginTop: 12, fontSize: 14, color: "var(--red)" }}>{error}</p>
               )}
 
               <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>

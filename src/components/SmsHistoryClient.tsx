@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useToast } from "@/components/ToastProvider";
+import { isRealSend } from "@/lib/sms/outcome";
+import { requestSend } from "@/lib/sms/sendClient";
 
 const statusSv: Record<string, string> = {
   pending:   "Skickas",
@@ -97,16 +100,16 @@ function SmsPopup({ log, onClose }: { log: LogRow; onClose: () => void }) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: colors.dot, flexShrink: 0 }} />
-            <span style={{ fontSize: 13, fontWeight: 700, color: colors.text }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: colors.text }}>
               {log.sequence_number ? `SMS ${log.sequence_number}` : log.status}
             </span>
-            <span style={{ fontSize: 12, color: "var(--text-faint)" }}>
+            <span style={{ fontSize: 14, color: "var(--text-faint)" }}>
               {formatTs(log.sent_at ?? log.created_at)}
             </span>
           </div>
           <button
             onClick={onClose}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-muted)", lineHeight: 1, padding: "0 4px" }}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 19, color: "var(--text-muted)", lineHeight: 1, padding: "0 4px" }}
           >
             ×
           </button>
@@ -117,7 +120,7 @@ function SmsPopup({ log, onClose }: { log: LogRow; onClose: () => void }) {
           border: "1px solid var(--border)",
           borderRadius: "var(--radius-sm)",
           padding: "14px 16px",
-          fontSize: 13.5,
+          fontSize: 16,
           color: "var(--text)",
           lineHeight: 1.65,
           whiteSpace: "pre-wrap",
@@ -127,7 +130,7 @@ function SmsPopup({ log, onClose }: { log: LogRow; onClose: () => void }) {
         </div>
 
         {log.status === "failed" && log.error && (
-          <div style={{ fontSize: 12, color: "var(--red)", background: "var(--red-bg, #fdf0f0)", border: "1px solid var(--red-border, #f0d0d0)", borderRadius: "var(--radius-sm)", padding: "8px 12px" }}>
+          <div style={{ fontSize: 14, color: "var(--red)", background: "var(--red-bg, #fdf0f0)", border: "1px solid var(--red-border, #f0d0d0)", borderRadius: "var(--radius-sm)", padding: "8px 12px" }}>
             Fel: {log.error}
           </div>
         )}
@@ -167,10 +170,10 @@ function LogChip({ log, onDeleted }: { log: LogRow; onDeleted: () => void }) {
         }}
       >
         <span style={{ width: 6, height: 6, borderRadius: "50%", background: colors.dot, flexShrink: 0 }} />
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: colors.text, whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: colors.text, whiteSpace: "nowrap" }}>
           {label}
         </span>
-        <span style={{ fontSize: 10.5, color: "#a8bdb8", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 12, color: "#a8bdb8", whiteSpace: "nowrap" }}>
           {formatTs(log.sent_at ?? log.created_at)}
         </span>
         <button
@@ -187,7 +190,7 @@ function LogChip({ log, onDeleted }: { log: LogRow; onDeleted: () => void }) {
         </button>
       </div>
       {log.status === "failed" && log.error && (
-        <div style={{ fontSize: 11, color: "#8b2020", paddingLeft: 6, lineHeight: 1.4, maxWidth: 320 }}>
+        <div style={{ fontSize: 12, color: "#8b2020", paddingLeft: 6, lineHeight: 1.4, maxWidth: 320 }}>
           {log.error}
         </div>
       )}
@@ -250,23 +253,23 @@ function PatientCard({
 
       {/* Name col */}
       <div>
-        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", lineHeight: 1.3 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: "var(--text)", lineHeight: 1.3 }}>
           {row.name}
         </div>
-        <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 2 }}>
+        <div style={{ fontSize: 14, color: "var(--text-faint)", marginTop: 2 }}>
           {row.phone ?? "—"}
         </div>
         <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
           {row.doNotContact && (
-            <span className="badge ignored" style={{ fontSize: 10 }}>Kontakta ej</span>
+            <span className="badge ignored" style={{ fontSize: 12 }}>Kontakta ej</span>
           )}
           {row.sentCount > 0 && (
-            <span style={{ fontSize: 10.5, fontWeight: 700, color: "#2a7a68", letterSpacing: "0.02em" }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#2a7a68", letterSpacing: "0.02em" }}>
               {row.sentCount} skicka{row.sentCount !== 1 ? "de" : "t"}
             </span>
           )}
           {row.failedCount > 0 && (
-            <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8b2020", letterSpacing: "0.02em" }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#8b2020", letterSpacing: "0.02em" }}>
               {row.failedCount} misslyckade
             </span>
           )}
@@ -274,7 +277,7 @@ function PatientCard({
       </div>
 
       {/* Date col */}
-      <div style={{ fontSize: 12, color: "var(--text-muted)", paddingTop: 2 }}>
+      <div style={{ fontSize: 14, color: "var(--text-muted)", paddingTop: 2 }}>
         {formatTs(row.lastActivity)}
       </div>
 
@@ -293,7 +296,7 @@ function PatientCard({
             onClick={() => setExpanded(v => !v)}
             style={{
               background: "none", border: "none", cursor: "pointer",
-              fontSize: 11.5, color: "var(--accent)", padding: 0,
+              fontSize: 14, color: "var(--accent)", padding: 0,
               textAlign: "left", fontWeight: 700, width: "fit-content",
             }}
           >
@@ -317,7 +320,7 @@ function PatientCard({
             display: "flex",
             alignItems: "center",
             gap: 5,
-            fontSize: 11.5,
+            fontSize: 14,
             padding: "5px 9px",
             opacity: clearing ? 0.4 : 1,
             transition: "border-color 140ms, color 140ms",
@@ -350,6 +353,7 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
   const [bulkState, setBulkState] = useState<BulkState>("idle");
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0 });
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+  const toast = useToast();
 
   function recount(logs: LogRow[]) {
     return {
@@ -379,22 +383,26 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
     const ids = [...selected];
     setBulkState("sending");
     setBulkProgress({ done: 0, total: ids.length });
-    let sent = 0, failed = 0;
+    let sent = 0, failed = 0, skipped = 0, dryRun = 0;
     for (const id of ids) {
-      try {
-        const res = await fetch("/api/reminders/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ patientId: id, forceNext: true }),
-        });
-        const data = await res.json();
-        const ok = data.status === "sent" || data.status === "dry_run";
-        if (ok) sent++; else failed++;
-      } catch { failed++; }
+      const outcome = await requestSend({ patientId: id });
+      if (isRealSend(outcome.kind)) sent++;
+      else if (outcome.kind === "dry_run") dryRun++;
+      else if (outcome.kind === "skipped") skipped++;
+      else failed++;
       setBulkProgress(p => ({ ...p, done: p.done + 1 }));
     }
     setBulkState("done");
-    setBulkMsg(failed === 0 ? `${sent} SMS skickade` : `${sent} skickade, ${failed} misslyckades`);
+    const parts = [`${sent} skickade`];
+    if (dryRun > 0) parts.push(`${dryRun} i testläge`);
+    if (skipped > 0) parts.push(`${skipped} hoppades över`);
+    if (failed > 0) parts.push(`${failed} misslyckades`);
+    const msg = parts.join(", ");
+    setBulkMsg(msg);
+    toast.push({
+      tone: failed > 0 ? "error" : skipped > 0 ? "warning" : "success",
+      title: msg,
+    });
     setSelected(new Set());
     setTimeout(() => { setBulkState("idle"); setBulkMsg(null); }, 4000);
   }
@@ -454,23 +462,23 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
           marginBottom: 12,
           animation: "slideDown 0.18s ease",
         }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.9)", flex: 1, whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.9)", flex: 1, whiteSpace: "nowrap" }}>
             {selected.size} {selected.size === 1 ? "vald" : "valda"}
           </span>
           {bulkState === "sending" && (
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", fontVariantNumeric: "tabular-nums" }}>
+            <span style={{ fontSize: 14, color: "rgba(255,255,255,0.7)", fontVariantNumeric: "tabular-nums" }}>
               Skickar {bulkProgress.done}/{bulkProgress.total}…
             </span>
           )}
           {bulkState === "done" && bulkMsg && (
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.7)" }}>{bulkMsg}</span>
+            <span style={{ fontSize: 14, color: "rgba(255,255,255,0.7)" }}>{bulkMsg}</span>
           )}
           <button
             onClick={sendToSelected}
             disabled={bulkState !== "idle"}
             style={{
               background: "#5bbfb5", color: "#fff", border: "none",
-              borderRadius: 5, padding: "6px 14px", fontSize: 13,
+              borderRadius: 5, padding: "6px 14px", fontSize: 14,
               fontWeight: 600, cursor: bulkState !== "idle" ? "default" : "pointer",
               whiteSpace: "nowrap", opacity: bulkState !== "idle" ? 0.5 : 1,
             }}
@@ -484,7 +492,7 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
             style={{
               background: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.8)",
               border: "1px solid rgba(255,255,255,0.2)", borderRadius: 5,
-              padding: "6px 12px", fontSize: 12, fontWeight: 500,
+              padding: "6px 12px", fontSize: 14, fontWeight: 500,
               cursor: "pointer", whiteSpace: "nowrap",
             }}
           >
@@ -520,7 +528,7 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
                 borderRadius: "var(--radius-sm)",
                 color: tab === t ? "var(--text)" : "var(--text-muted)",
                 cursor: "pointer",
-                fontSize: 13,
+                fontSize: 14,
                 fontWeight: tab === t ? 600 : 500,
                 padding: "5px 14px",
                 display: "flex",
@@ -532,7 +540,7 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
             >
               {label}
               <span style={{
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: 700,
                 color: tab === t ? countColor : "var(--text-faint)",
                 background: tab === t ? "transparent" : "none",
@@ -550,7 +558,7 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
           className="danger"
           onClick={clearAll}
           disabled={clearingAll || rows.length === 0}
-          style={{ fontSize: 12, padding: "5px 14px", minHeight: "unset", display: "flex", alignItems: "center", gap: 6 }}
+          style={{ fontSize: 14, padding: "5px 14px", minHeight: "unset", display: "flex", alignItems: "center", gap: 6 }}
         >
           <TrashIcon />
           {clearingAll ? "Rensar…" : "Rensa all historik"}
@@ -577,7 +585,7 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
             padding: "40px 24px",
             textAlign: "center",
             color: "var(--text-muted)",
-            fontSize: 13.5,
+            fontSize: 16,
           }}>
             Inga poster matchar det valda filtret.
           </div>

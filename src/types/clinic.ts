@@ -28,7 +28,11 @@ export type SkipReason =
   | "waiting"
   | "unresolved_placeholder"
   | "sequence_complete"
-  | "delivery_pending";
+  | "delivery_pending"
+  /** Scheduled send whose booking cycle was reset before it fired. */
+  | "stale_cycle"
+  /** Requested step is behind one already sent in this cycle. */
+  | "out_of_order";
 
 export type Patient = {
   id: string;

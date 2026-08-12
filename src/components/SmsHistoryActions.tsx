@@ -1,6 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useToast } from "@/components/ToastProvider";
+import { isRealSend } from "@/lib/sms/outcome";
+import { requestSend } from "@/lib/sms/sendClient";
 
 export function SmsHistoryActions({
   patientId,
@@ -12,29 +16,19 @@ export function SmsHistoryActions({
   const [busy, setBusy] = useState<string | null>(null);
   const [dnc, setDnc] = useState(doNotContact);
   const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
+  const router = useRouter();
 
   async function sendSms() {
     setBusy("send");
     setError(null);
-    try {
-      const res = await fetch("/api/reminders/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId, forceNext: true }),
-      });
-      const data = await res.json().catch(() => ({})) as { status?: string; error?: string };
-      if (!res.ok) {
-        setError(data.error ?? `Fel ${res.status}`);
-      } else if (data.status === "failed") {
-        setError(data.error ?? "SMS misslyckades");
-      } else {
-        window.location.reload();
-      }
-    } catch {
-      setError("Nätverksfel — kontrollera anslutningen");
-    } finally {
-      setBusy(null);
-    }
+    const outcome = await requestSend({ patientId });
+    toast.outcome(outcome);
+    setBusy(null);
+    // router.refresh() instead of window.location.reload(): a full reload
+    // discards the toast before it can be read, which is why the previous
+    // version communicated success only by the absence of an error.
+    if (isRealSend(outcome.kind) || outcome.kind === "dry_run") router.refresh();
   }
 
   async function toggleDnc() {
@@ -51,13 +45,21 @@ export function SmsHistoryActions({
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        setError(data.error ?? `Fel ${res.status}`);
+        const message = data.error ?? `Fel ${res.status}`;
+        setError(message);
+        toast.push({ tone: "error", title: message });
       } else {
         setDnc((prev) => !prev);
-        window.location.reload();
+        toast.push({
+          tone: "success",
+          title: dnc ? "Patienten återaktiverad" : "Patienten borttagen från utskick",
+        });
+        router.refresh();
       }
     } catch {
-      setError("Nätverksfel — kontrollera anslutningen");
+      const message = "Nätverksfel — kontrollera anslutningen";
+      setError(message);
+      toast.push({ tone: "error", title: message });
     } finally {
       setBusy(null);
     }
@@ -78,7 +80,7 @@ export function SmsHistoryActions({
         </button>
       </div>
       {error && (
-        <div style={{ fontSize: 11.5, color: "var(--red)", fontWeight: 500, maxWidth: 220 }}>
+        <div style={{ fontSize: 14, color: "var(--red)", fontWeight: 500, maxWidth: 220 }}>
           {error}
         </div>
       )}

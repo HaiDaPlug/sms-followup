@@ -13,7 +13,7 @@ const formStyles = `
   }
 
   .lf-label {
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 500;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -29,7 +29,7 @@ const formStyles = `
     padding: 13px 16px;
     border: 1.5px solid #e4ede9;
     border-radius: 6px;
-    font-size: 14.5px;
+    font-size: 16px;
     font-family: 'DM Sans', sans-serif;
     font-weight: 300;
     outline: none;
@@ -59,7 +59,7 @@ const formStyles = `
     color: #fff;
     border: none;
     border-radius: 6px;
-    font-size: 13.5px;
+    font-size: 16px;
     font-family: 'DM Sans', sans-serif;
     font-weight: 500;
     letter-spacing: 0.04em;
@@ -121,7 +121,7 @@ const formStyles = `
     border: 1px solid #f0d0d0;
     border-radius: 6px;
     padding: 11px 14px;
-    font-size: 13px;
+    font-size: 14px;
     color: #a33030;
     margin-bottom: 20px;
     animation: lf-shake 0.35s cubic-bezier(0.36,0.07,0.19,0.97);
