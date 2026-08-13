@@ -56,8 +56,8 @@ One deployment per clinic. Supabase Auth gate in place.
 | `TEST_SMS_TO` | ✅ | — | |
 | `CRON_SECRET` | ✅ | — | Must also be mirrored into the Supabase Vault as `cron_secret` — the scheduled-SMS worker is triggered by `pg_cron`, not Vercel |
 | `SMS_DELIVERY_WEBHOOK_SECRET` | ❌ | ❓ | Verified absent locally 2026-08-12. Required for 46elks delivery receipts. Without it no delivery URL is sent to the provider **and** the webhook rejects every request, so logs stay at `sent` and never advance to `delivered`/`failed` |
-| `SMS_VERIFY_DELIVERY` | unset (enabled) | ❓ | Post-send 46elks status polling is enabled unless set exactly to `off`. Polling complements the webhook; it does not replace the need to configure delivery receipts |
-| `SMS_VERIFY_BUDGET_MS` | unset (6000 ms) | ❓ | Strict wall-clock budget per send for status polling. Each request is capped by the remaining budget; a missing verdict leaves the log at `sent`. This budget is spent sequentially per patient today — see session 18 risks |
+| `SMS_VERIFY_DELIVERY` | unset (enabled in code) | ❓ | Optional post-send 46elks polling. **Decision 2026-08-13: polling is not required for the working send path and should be set to `off` for production batches.** Accepted sends remain `sent`; the delivery webhook is the preferred asynchronous source of later `delivered`/`failed` truth |
+| `SMS_VERIFY_BUDGET_MS` | unset (6000 ms) | ❓ | Only used when optional polling is enabled. The budget is per send and sequential today, which is why batch polling is not recommended. Do not solve this with concurrent polling unless requirements change |
 | `SUPABASE_DB_PASSWORD` | ✅ | — | **Rotated 2026-08-12.** Supabase CLI only; not read by app code. Re-link the CLI if it prompts |
 
 **Credential rotation (2026-08-12).** All credentials present in `.env.local` at the start of session 17 were treated as exposed and rotated. Verified blind — values were never printed, only derived facts:
@@ -103,8 +103,8 @@ One deployment per clinic. Supabase Auth gate in place.
 |----------|--------|-------|
 | `POST /api/import/bokadirekt` | Working | CSV upload, idempotent |
 | `GET /api/dashboard/*` | Working | stats, ready-patients, sms-this-month, review-items, activity |
-| `POST /api/reminders/send` | Working in code; live delivery polling unproven | Manual send — `forceNext` bypasses day threshold (NOT safety gates). Returns a typed six-state outcome and polls 46elks within a strict per-send budget |
-| `POST /api/reminders/send-message` | Working in code; live delivery polling unproven | Failed-SMS retry; server validates patient/cycle, reserves sequence, shares the same delivery resolver as normal sends, and updates the existing failed review item rather than creating duplicates |
+| `POST /api/reminders/send` | Working | Manual send — `forceNext` bypasses day threshold (NOT safety gates). Returns a typed six-state outcome. Optional inline polling exists in code but is not required or recommended for production batches |
+| `POST /api/reminders/send-message` | Working | Failed-SMS retry; server validates patient/cycle, reserves sequence, shares the same delivery classification as normal sends, and updates the existing failed review item rather than creating duplicates |
 | `POST /api/reminders/test` | Working | Test SMS to configured phone |
 | `GET/POST /api/settings` | Working | |
 | `POST /api/patients` | Working | Manual patient creation |
@@ -155,8 +155,8 @@ For live sends, the app now:
 1. Inserts a `pending` reminder log using the cycle key `(patient_id, booking_id, sequence_number)`
 2. Relies on a partial unique index to reject concurrent reservations with `23505`
 3. Calls the SMS provider only after the reservation succeeds
-4. If 46elks accepted the request and returned an ID, polls `GET /a1/SMS/{id}` until `delivered`/`failed` or the strict `SMS_VERIFY_BUDGET_MS` deadline
-5. Finalizes the same row as `sent`, `delivered`, `failed`, or `unknown`; only a provider-confirmed failure downgrades an accepted send
+4. If optional polling is enabled, asks `GET /a1/SMS/{id}` for an early terminal verdict within `SMS_VERIFY_BUDGET_MS`; production batches should disable this
+5. Finalizes the same row as `sent` after provider acceptance (or as `delivered`/`failed` if optional polling found a terminal result), while uncertain provider requests remain `unknown`. With polling off, the delivery webhook can later advance `sent` asynchronously
 
 `dry_run` rows use the same uniqueness key and are final immediately.
 
@@ -484,7 +484,7 @@ Real concurrent-worker races and cancellation races still require a live Postgre
 ### Implemented in code
 
 - **One send-outcome vocabulary.** Interactive send paths now return and render `sent`, `delivered`, `dry_run`, `skipped`, `failed`, or `unknown` without collapsing dry runs, skips, or uncertain provider results into success. Toasts survive `router.refresh()` and provider-confirmed delivery is labelled explicitly.
-- **Active post-send delivery verification.** Accepted 46elks sends with a provider ID are polled until a terminal result or a strict overall deadline. Each lookup is capped by the time remaining, so a hanging request cannot extend the configured budget by its independent request timeout. `unsupported`, `pending`, and `unreachable` are not treated as delivery failure because doing so would make duplicate retries likely.
+- **Optional post-send delivery verification.** The code can poll accepted 46elks sends for an early terminal result within a strict deadline. This is verified and bounded, but it is not necessary for successful sending. The operational decision is to disable it for production batches and use the delivery webhook for asynchronous `delivered`/`failed` transitions. `unsupported`, `pending`, and `unreachable` never become false failures.
 - **Shared delivery classification.** Normal, scheduled, and failed-SMS retry paths use `resolveDelivery`; the retry route returns the same typed outcome and refreshes its existing open review item on another failure instead of accumulating duplicate review work.
 - **Scheduled-send rebooking safety.** Migration 023 cancels pending scheduled rows transactionally when webhook booking RPCs reset a cycle. The worker also refuses any schedule made stale by a later non-cancelled booking, including CSV imports that bypass those RPCs.
 - **Sequence ordering.** Explicit sequence choices are validated at scheduling and send time; a step equal to or behind an already completed step is logged as `out_of_order`.
@@ -503,18 +503,17 @@ Real concurrent-worker races and cancellation races still require a live Postgre
 
 - **Migrations 022–024 are unapplied.** Their SQL bodies were reviewed against the latest definitions in 014, 017, and 018, but no live Postgres instance has parsed or executed them. Transactional scheduled-SMS cancellation and the metadata backfill do not exist in production until these migrations are applied.
 - **The migration 022 backfill touches every patient.** Apply it first in a non-production environment and compare patients with future appointments, cancelled appointments, and no past valid booking before production rollout.
-- **Real 46elks polling timing is unproven.** Tests cover created → sent → delivered, terminal failure, disabled verification, an unreachable API, and a hanging request bounded by the deadline, but provider timing and serverless behavior have not been observed live.
-- **Polling is sequential today.** With `max_per_day = 25` and the default 6000 ms per-send budget, verification alone can add up to roughly 150 seconds to a worst-case batch, plus provider and database time. This is a performance/availability risk, not a reason to weaken delivery classification silently.
-- **Do not add concurrency without evidence.** First measure production batch sizes, cron duration, function timeout, webhook reliability, and 46elks throttling. If timeouts are real, prefer a small bounded pool (for example 3) or a batch-wide verification budget; do not launch all sends concurrently. Reservation uniqueness and provider rate limits must remain intact.
-- **Webhook receipts remain the durable asynchronous path.** Polling catches quick terminal results but a pending result at the deadline stays `sent`; later truth still depends on `SMS_DELIVERY_WEBHOOK_SECRET` and a publicly reachable HTTPS callback.
+- **Inline polling is not part of the required production path.** Real 46elks polling timing remains unproven, but the clinic's accepted-send flow already works without it. With `max_per_day = 25`, the default per-send budget could add roughly 150 seconds to a worst-case sequential batch. Set `SMS_VERIFY_DELIVERY=off` rather than adding polling concurrency.
+- **Concurrent polling is not a follow-up.** It would optimize an optional mechanism while adding coordination and rate-limit complexity. Revisit only if a future requirement demands immediate delivery verdicts inside the original request.
+- **Webhook receipts are the preferred durable asynchronous path.** Accepted messages remain `sent`; later `delivered`/`failed` truth depends on `SMS_DELIVERY_WEBHOOK_SECRET` and a publicly reachable HTTPS callback. Sending functionality itself does not depend on receiving that callback.
 - **The stale-cycle guard is intentionally conservative.** A later non-cancelled historical booking entered after scheduling may skip a legitimate message. Skipping is safer than sending a stale rebooking message, but this should be monitored after rollout.
 
 ### Follow-up order
 
 1. Apply migrations 022–024 to a non-production Supabase database and validate the backfill plus both booking RPCs.
-2. Run webhook, CSV-rebooking, scheduled-SMS, cancellation, ordering, and delivery-verification smoke tests against that environment.
-3. Configure and verify `SMS_DELIVERY_WEBHOOK_SECRET` in Vercel; observe real delivery transitions.
-4. Measure daily batch duration before choosing any concurrent polling/sending change.
+2. Set `SMS_VERIFY_DELIVERY=off` in the production environment before deploying the session 18 batch path; no concurrent-polling work is planned.
+3. Run webhook, CSV-rebooking, scheduled-SMS, cancellation, ordering, and accepted-send smoke tests against that environment.
+4. Configure and verify `SMS_DELIVERY_WEBHOOK_SECRET` in Vercel if delivered/failed tracking is desired; sending remains functional without it.
 5. Apply migrations to production only after expected patient metadata changes are reviewed.
 
 ---
@@ -562,8 +561,8 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 ### Blocking / highest value
 
 - [ ] **Apply and validate migrations 022–024 outside production.** Confirm SQL parses, compare the 022 patient backfill against expected past/non-cancelled bookings, and exercise apply/cancel booking RPCs without losing conversion logging. Production still runs only 001–021.
-- [ ] **Smoke test session 18 against real integrations.** Cover webhook rebooking, CSV rebooking after the appointment passes, pending scheduled-row cancellation, a row already in `processing`, out-of-order schedule refusal, 46elks delivered/failed/pending results, and failed retry review-item reuse.
-- [ ] **Measure the daily batch before changing concurrency.** Record typical/max patient count, Vercel duration and timeout headroom, delivery-webhook reliability, and provider throttling. Only if timeouts are observed, choose a small bounded pool or batch-wide verification budget; unrestricted concurrency is not acceptable.
+- [ ] **Disable optional inline polling for production batches.** Set `SMS_VERIFY_DELIVERY=off`; accepted sends should be recorded as `sent` immediately and later delivery truth should arrive asynchronously if the webhook is configured. Concurrent polling is intentionally not planned.
+- [ ] **Smoke test session 18 against real integrations.** Cover webhook rebooking, CSV rebooking after the appointment passes, pending scheduled-row cancellation, a row already in `processing`, out-of-order schedule refusal, accepted 46elks sends, webhook-delivered/failed transitions, and failed retry review-item reuse.
 - [ ] **Wire and test the BokaDirekt webhook.** Nothing has ever been received (`event_created_at` null on all 4,715 bookings), so conversion tracking is entirely unproven. Until this fires, "SMS-matchade" stays 0 regardless of real-world results.
 - [ ] **Test the Supabase `pg_cron` scheduled-SMS job end-to-end.** Never verified against a live tick. Steps:
   - [ ] Confirm both Vault secrets exist: `select name from vault.secrets where name in ('app_base_url','cron_secret');`
