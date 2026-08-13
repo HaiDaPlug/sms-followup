@@ -6,7 +6,8 @@ import {
   latestValidBooking,
   renderSmsTemplate,
   resolveSteps,
-  unresolvedPlaceholders
+  unresolvedPlaceholders,
+  validateSequenceOrder
 } from "@/lib/reminders/eligibility";
 
 const CLINIC_TIME_ZONE = "Europe/Stockholm";
@@ -78,6 +79,23 @@ export async function POST(request: Request) {
       (!Number.isInteger(body.sequenceOverride) || body.sequenceOverride < 1 || body.sequenceOverride > steps.length)
     ) {
       return NextResponse.json({ error: "Ogiltigt mallval" }, { status: 400 });
+    }
+
+    // Range alone is not enough: picking a step that has already been sent in
+    // this cycle would queue an out-of-order send. Rejecting it here gives the
+    // operator the reason immediately instead of surfacing it as a silent skip
+    // when the job fires, possibly months later. The send path re-checks too,
+    // since the cycle can advance in between.
+    if (body.sequenceOverride !== undefined) {
+      const orderError = validateSequenceOrder(
+        patient.id,
+        body.sequenceOverride,
+        settings,
+        store.reminder_logs
+      );
+      if (orderError) {
+        return NextResponse.json({ error: orderError }, { status: 409 });
+      }
     }
 
     const next = body.sequenceOverride !== undefined

@@ -13,10 +13,15 @@ type Props = {
   initialMessage: string;
 };
 
+type InlineResult = {
+  tone: "success" | "info" | "error";
+  text: string;
+};
+
 export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, initialMessage }: Props) {
   const [message, setMessage] = useState(initialMessage);
   const [busy, setBusy] = useState<"send" | "resolve" | "ignore" | null>(null);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [result, setResult] = useState<InlineResult | null>(null);
   const toast = useToast();
   const router = useRouter();
 
@@ -44,7 +49,7 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
       // The request may have reached the server, so this cannot be reported as
       // a clean failure either.
       const text = "Nätverksfel — kunde inte bekräfta om SMS:et skickades";
-      setResult({ ok: false, text });
+      setResult({ tone: "error", text });
       toast.push({
         tone: "error",
         title: text,
@@ -64,7 +69,10 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
     };
 
     toast.outcome(outcome);
-    setResult({ ok: isRealSend(outcome.kind), text: outcome.message });
+    setResult({
+      tone: isRealSend(outcome.kind) ? "success" : outcome.kind === "dry_run" ? "info" : "error",
+      text: outcome.message,
+    });
     if (isRealSend(outcome.kind) || outcome.kind === "dry_run") router.refresh();
   }
 
@@ -79,12 +87,12 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        setResult({ ok: false, text: data.error ?? `Fel ${res.status}` });
+        setResult({ tone: "error", text: data.error ?? `Fel ${res.status}` });
       } else {
         window.location.reload();
       }
     } catch {
-      setResult({ ok: false, text: "Nätverksfel — kontrollera anslutningen" });
+      setResult({ tone: "error", text: "Nätverksfel — kontrollera anslutningen" });
     } finally {
       setBusy(null);
     }
@@ -134,7 +142,15 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
           {busy === "ignore" ? "…" : "Ignorera"}
         </button>
         {result && (
-          <span style={{ fontSize: 14, fontWeight: 500, color: result.ok ? "var(--accent)" : "var(--red)" }}>
+          <span style={{
+            fontSize: 14,
+            fontWeight: 500,
+            color: result.tone === "success"
+              ? "var(--accent)"
+              : result.tone === "info"
+                ? "var(--blue)"
+                : "var(--red)",
+          }}>
             {result.text}
           </span>
         )}

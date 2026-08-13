@@ -1,7 +1,7 @@
 # Current State - Clinic Rebooking Reminder System
 
-**Last updated:** 2026-08-12 (session 17 - credential rotation; session 16 - analytics correctness, attribution window, pg_cron scheduling, RLS, Supabase key naming)
-**Phase:** Migrations 001–021 applied to production, including 020 (pg_cron) and 021 (RLS). Deployed and building. Analytics page renders live data; conversion tracking is **not yet proven end-to-end** because no BokaDirekt webhook booking has ever been received. Supabase key rotation is mid-cutover: new publishable/secret keys are set and verified locally, but **Vercel still has only the legacy keys** — see the env table and `docs/supabase-key-rotation.md`.
+**Last updated:** 2026-08-13 (session 18 - send-outcome correctness, delivery verification, scheduled-SMS rebooking safety, sequence ordering, booking-metadata consistency)
+**Phase:** Migrations 001–021 are applied to production, including 020 (pg_cron) and 021 (RLS). Migrations 022–024 are implemented and reviewed but **not applied to any database**. The session 18 application changes pass 76 tests, typecheck, and a production build, but have not been exercised against live Postgres or real 46elks delivery timing. Analytics renders live data; conversion tracking is **not yet proven end-to-end** because no BokaDirekt webhook booking has ever been received. Supabase key rotation is mid-cutover: new publishable/secret keys are set and verified locally, but **Vercel still has only the legacy keys** — see the env table and `docs/supabase-key-rotation.md`.
 
 ---
 
@@ -25,7 +25,7 @@ One deployment per clinic. Supabase Auth gate in place.
 ## Infrastructure
 
 - **Next.js 15** App Router + TypeScript, React 19
-- **Supabase** (Stockholm region, project `updomqqgivylpunzuanw`) — migrations 001–021 applied
+- **Supabase** (Stockholm region, project `updomqqgivylpunzuanw`) — migrations 001–021 applied; 022–024 pending review and non-production application
 - **SMS**: 46elks adapter in `src/lib/sms/provider.ts` — virtual number +46766864658
 - **Auth**: Supabase Auth via `@supabase/ssr`. Middleware protects `/app/*` and `/api/*`. Cron + webhook routes use secret-based auth.
 - **RLS**: enabled on all nine application tables (migration 021). Writes and most reads use the service role, which bypasses RLS; the only anon-key data reader is the analytics page, covered by four `authenticated`-scoped SELECT policies. Verified 2026-08-04 that the anon key returns `42501 permission denied` on every table.
@@ -56,6 +56,8 @@ One deployment per clinic. Supabase Auth gate in place.
 | `TEST_SMS_TO` | ✅ | — | |
 | `CRON_SECRET` | ✅ | — | Must also be mirrored into the Supabase Vault as `cron_secret` — the scheduled-SMS worker is triggered by `pg_cron`, not Vercel |
 | `SMS_DELIVERY_WEBHOOK_SECRET` | ❌ | ❓ | Verified absent locally 2026-08-12. Required for 46elks delivery receipts. Without it no delivery URL is sent to the provider **and** the webhook rejects every request, so logs stay at `sent` and never advance to `delivered`/`failed` |
+| `SMS_VERIFY_DELIVERY` | unset (enabled) | ❓ | Post-send 46elks status polling is enabled unless set exactly to `off`. Polling complements the webhook; it does not replace the need to configure delivery receipts |
+| `SMS_VERIFY_BUDGET_MS` | unset (6000 ms) | ❓ | Strict wall-clock budget per send for status polling. Each request is capped by the remaining budget; a missing verdict leaves the log at `sent`. This budget is spent sequentially per patient today — see session 18 risks |
 | `SUPABASE_DB_PASSWORD` | ✅ | — | **Rotated 2026-08-12.** Supabase CLI only; not read by app code. Re-link the CLI if it prompts |
 
 **Credential rotation (2026-08-12).** All credentials present in `.env.local` at the start of session 17 were treated as exposed and rotated. Verified blind — values were never printed, only derived facts:
@@ -101,8 +103,8 @@ One deployment per clinic. Supabase Auth gate in place.
 |----------|--------|-------|
 | `POST /api/import/bokadirekt` | Working | CSV upload, idempotent |
 | `GET /api/dashboard/*` | Working | stats, ready-patients, sms-this-month, review-items, activity |
-| `POST /api/reminders/send` | Working | Manual send — `forceNext` bypasses day threshold (NOT safety gates) |
-| `POST /api/reminders/send-message` | Working | Failed-SMS retry; server validates patient/cycle, reserves sequence, resolves review only on success |
+| `POST /api/reminders/send` | Working in code; live delivery polling unproven | Manual send — `forceNext` bypasses day threshold (NOT safety gates). Returns a typed six-state outcome and polls 46elks within a strict per-send budget |
+| `POST /api/reminders/send-message` | Working in code; live delivery polling unproven | Failed-SMS retry; server validates patient/cycle, reserves sequence, shares the same delivery resolver as normal sends, and updates the existing failed review item rather than creating duplicates |
 | `POST /api/reminders/test` | Working | Test SMS to configured phone |
 | `GET/POST /api/settings` | Working | |
 | `POST /api/patients` | Working | Manual patient creation |
@@ -153,9 +155,12 @@ For live sends, the app now:
 1. Inserts a `pending` reminder log using the cycle key `(patient_id, booking_id, sequence_number)`
 2. Relies on a partial unique index to reject concurrent reservations with `23505`
 3. Calls the SMS provider only after the reservation succeeds
-4. Finalizes the same row as `sent` or `failed`
+4. If 46elks accepted the request and returned an ID, polls `GET /a1/SMS/{id}` until `delivered`/`failed` or the strict `SMS_VERIFY_BUDGET_MS` deadline
+5. Finalizes the same row as `sent`, `delivered`, `failed`, or `unknown`; only a provider-confirmed failure downgrades an accepted send
 
 `dry_run` rows use the same uniqueness key and are final immediately.
+
+All interactive send surfaces consume the same six-state vocabulary: `sent`, `delivered`, `dry_run`, `skipped`, `failed`, and `unknown`. Only `sent` and `delivered` mean a real SMS left the application; dry runs and guard skips are never presented as successful sends. Dashboard/monthly counts include both `sent` and `delivered`.
 
 If the provider call may have completed but database finalization did not, the row remains `pending`. Cron reconciles `pending` rows older than five minutes to `unknown` and creates a `delivery_unknown` review item atomically. Both statuses produce the hard block **Delivery pending**, so no later sequence step can send until an operator resolves it:
 - **Markera skickad** → log becomes `sent`, `sent_at` is set, sequence remains consumed
@@ -173,13 +178,17 @@ Staff can schedule a specific SMS template for a specific patient at a future cl
 1. `claim_due_scheduled_sms` (migration 016) atomically claims due `pending` rows with `FOR UPDATE SKIP LOCKED`, flipping them to `processing` in the same statement — two concurrent workers cannot claim the same row.
 2. A crashed/orphaned `processing` row older than 30 minutes is auto-reconciled to `unknown` rather than retried.
 3. Eligibility hard blocks are rechecked at delivery time; soft blocks (`Waiting`/already `Sent`) are intentionally bypassed since an explicit schedule overrides normal cadence.
-4. The reservation (`reminder_logs` row) is always written before the provider is called.
-5. Outcomes are `sent`, `dry_run`, `unknown` (provider result ambiguous — never auto-retried), `skipped` (e.g. patient deleted), or `failed`. Dry-run is never mapped to `sent`.
-6. `completeScheduledSms` only updates a row that is still `processing`; if the row moved on (e.g. reconciled as stale), it throws instead of overwriting.
+4. A stale-cycle guard refuses a frozen message if another non-cancelled booking was created or occurs after the scheduled row. This specifically closes the CSV-import path, which does not pass through the booking RPCs that cancel pending schedules.
+5. Explicit sequence selection is checked both when scheduling and immediately before sending. A step equal to or behind the highest completed step in the current cycle is refused with `out_of_order` rather than silently sent.
+6. The reservation (`reminder_logs` row) is always written before the provider is called.
+7. Outcomes are `sent`, `delivered`, `dry_run`, `unknown` (provider result ambiguous — never auto-retried), `skipped` (e.g. stale cycle or patient deleted), or `failed`. Dry-run is never mapped to `sent`.
+8. `completeScheduledSms` only updates a row that is still `processing`; if the row moved on (e.g. reconciled as stale), it throws instead of overwriting.
 
 **Cancellation (`DELETE /api/scheduled-sms/:id`):** only succeeds while the row is still `pending`; once claimed, cancellation returns 409 rather than racing the worker.
 
 **Collision with the daily cron:** `processDailyReminders` excludes any patient with an active (`pending`/`processing`) scheduled SMS from its own batch, so the daily worker cannot consume a sequence step out from under a pending scheduled job. The two crons run as fully separate endpoints, so an exception in one cannot block the other.
+
+**Rebooking cancellation (migration 023, not yet applied):** when a webhook booking resets a reminder cycle, pending scheduled rows for that patient are cancelled inside the same database transaction. Rows already in `processing` are deliberately never rewritten because the provider may already have accepted them; the send-time stale-cycle guard is the final backstop. CSV imports do not call the RPC, so their protection is entirely the send-time guard.
 
 **Patient deletion:** `patient_id` is `ON DELETE SET NULL` (not cascade) — history is preserved via the `patient_name`/`recipient_phone` snapshot taken at creation.
 
@@ -470,6 +479,46 @@ Real concurrent-worker races and cancellation races still require a live Postgre
 
 ---
 
+## Session 18 — SMS Correctness and Delivery Reality
+
+### Implemented in code
+
+- **One send-outcome vocabulary.** Interactive send paths now return and render `sent`, `delivered`, `dry_run`, `skipped`, `failed`, or `unknown` without collapsing dry runs, skips, or uncertain provider results into success. Toasts survive `router.refresh()` and provider-confirmed delivery is labelled explicitly.
+- **Active post-send delivery verification.** Accepted 46elks sends with a provider ID are polled until a terminal result or a strict overall deadline. Each lookup is capped by the time remaining, so a hanging request cannot extend the configured budget by its independent request timeout. `unsupported`, `pending`, and `unreachable` are not treated as delivery failure because doing so would make duplicate retries likely.
+- **Shared delivery classification.** Normal, scheduled, and failed-SMS retry paths use `resolveDelivery`; the retry route returns the same typed outcome and refreshes its existing open review item on another failure instead of accumulating duplicate review work.
+- **Scheduled-send rebooking safety.** Migration 023 cancels pending scheduled rows transactionally when webhook booking RPCs reset a cycle. The worker also refuses any schedule made stale by a later non-cancelled booking, including CSV imports that bypass those RPCs.
+- **Sequence ordering.** Explicit sequence choices are validated at scheduling and send time; a step equal to or behind an already completed step is logged as `out_of_order`.
+- **One `last_booking_at` definition.** Migration 022 defines it as the most recent non-cancelled booking at or before `now()`, provides one refresh function for SQL writers, aligns the CSV cancellation predicate, and backfills patient metadata. Migration 023 rewrites the live booking RPCs to call the shared definition without removing the conversion behavior added in 017/018.
+- **Delivered counts are real sends.** Daily snapshots, dashboard totals, and the monthly SMS feed count both `sent` and `delivered`.
+
+### Verified
+
+- `npm test` — 76 tests across 9 files pass.
+- `npm run typecheck` — passes.
+- `npm run build` — passes; all 29 static pages generate and all routes compile.
+- `git diff --check` — passes.
+- `npm run lint` — **not available**: `next lint` opens the interactive first-time ESLint configuration prompt. No configuration was created implicitly.
+
+### Correctness boundaries and remaining reality gaps
+
+- **Migrations 022–024 are unapplied.** Their SQL bodies were reviewed against the latest definitions in 014, 017, and 018, but no live Postgres instance has parsed or executed them. Transactional scheduled-SMS cancellation and the metadata backfill do not exist in production until these migrations are applied.
+- **The migration 022 backfill touches every patient.** Apply it first in a non-production environment and compare patients with future appointments, cancelled appointments, and no past valid booking before production rollout.
+- **Real 46elks polling timing is unproven.** Tests cover created → sent → delivered, terminal failure, disabled verification, an unreachable API, and a hanging request bounded by the deadline, but provider timing and serverless behavior have not been observed live.
+- **Polling is sequential today.** With `max_per_day = 25` and the default 6000 ms per-send budget, verification alone can add up to roughly 150 seconds to a worst-case batch, plus provider and database time. This is a performance/availability risk, not a reason to weaken delivery classification silently.
+- **Do not add concurrency without evidence.** First measure production batch sizes, cron duration, function timeout, webhook reliability, and 46elks throttling. If timeouts are real, prefer a small bounded pool (for example 3) or a batch-wide verification budget; do not launch all sends concurrently. Reservation uniqueness and provider rate limits must remain intact.
+- **Webhook receipts remain the durable asynchronous path.** Polling catches quick terminal results but a pending result at the deadline stays `sent`; later truth still depends on `SMS_DELIVERY_WEBHOOK_SECRET` and a publicly reachable HTTPS callback.
+- **The stale-cycle guard is intentionally conservative.** A later non-cancelled historical booking entered after scheduling may skip a legitimate message. Skipping is safer than sending a stale rebooking message, but this should be monitored after rollout.
+
+### Follow-up order
+
+1. Apply migrations 022–024 to a non-production Supabase database and validate the backfill plus both booking RPCs.
+2. Run webhook, CSV-rebooking, scheduled-SMS, cancellation, ordering, and delivery-verification smoke tests against that environment.
+3. Configure and verify `SMS_DELIVERY_WEBHOOK_SECRET` in Vercel; observe real delivery transitions.
+4. Measure daily batch duration before choosing any concurrent polling/sending change.
+5. Apply migrations to production only after expected patient metadata changes are reviewed.
+
+---
+
 ## Typography and Type Scale
 
 ### Body font: Inter → Source Sans 3
@@ -512,6 +561,9 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 
 ### Blocking / highest value
 
+- [ ] **Apply and validate migrations 022–024 outside production.** Confirm SQL parses, compare the 022 patient backfill against expected past/non-cancelled bookings, and exercise apply/cancel booking RPCs without losing conversion logging. Production still runs only 001–021.
+- [ ] **Smoke test session 18 against real integrations.** Cover webhook rebooking, CSV rebooking after the appointment passes, pending scheduled-row cancellation, a row already in `processing`, out-of-order schedule refusal, 46elks delivered/failed/pending results, and failed retry review-item reuse.
+- [ ] **Measure the daily batch before changing concurrency.** Record typical/max patient count, Vercel duration and timeout headroom, delivery-webhook reliability, and provider throttling. Only if timeouts are observed, choose a small bounded pool or batch-wide verification budget; unrestricted concurrency is not acceptable.
 - [ ] **Wire and test the BokaDirekt webhook.** Nothing has ever been received (`event_created_at` null on all 4,715 bookings), so conversion tracking is entirely unproven. Until this fires, "SMS-matchade" stays 0 regardless of real-world results.
 - [ ] **Test the Supabase `pg_cron` scheduled-SMS job end-to-end.** Never verified against a live tick. Steps:
   - [ ] Confirm both Vault secrets exist: `select name from vault.secrets where name in ('app_base_url','cron_secret');`
@@ -554,12 +606,16 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 `npm run test` runs `vitest run`. Coverage is intentionally narrow — it targets specific safety guarantees added during hardening passes rather than the whole app:
 
 - `src/lib/storage/store.test.ts` — scheduled-SMS cancel/complete/claim conditional-update guarantees
-- `src/lib/reminders/process.test.ts` — scheduled-SMS delivery outcome mapping (skipped/dry-run/unknown)
+- `src/lib/reminders/process.test.ts` — scheduled-SMS delivery outcomes, CSV/webhook stale-cycle refusal, provider verification, and delivered counting
+- `src/lib/reminders/sequenceOrder.test.ts` — explicit sequence bounds and current-cycle ordering
+- `src/lib/sms/outcome.test.ts` — six-state outcome mapping, provider-confirmed delivery, and sent/delivered counting
+- `src/lib/sms/verifyDelivery.test.ts` — bounded 46elks polling, terminal outcomes, unreachable/disabled behavior, and hanging-request deadline enforcement
+- `app/api/reminders/send-message/route.test.ts` — repeated failed retries reuse one review item and return the resolved error
 - `src/lib/analytics/dayKeys.test.ts` — Stockholm day bucketing and window boundaries across both 2026 DST transitions; the UTC-noon anchor producing strictly consecutive days
 - `src/lib/analytics/conversionRate.test.ts` — distinct-patient counting, null vs. 0 %, and the intersection that keeps the rate ≤ 100 %
 - `src/lib/analytics/attributionWindow.test.ts` — exclusive upper bound, untrusted query-param parsing, and the monotonicity property that makes the window safe to change retroactively
 
-**41 tests across 5 files.** Note the shape of this coverage: it is all *pure functions*. Nothing exercises a real database, a real HTTP call, or the RLS policies — see "Testing gaps to close" in session 16.
+**76 tests across 9 files.** Provider HTTP is mocked and route/database behavior is simulated; nothing exercises a real database, real 46elks traffic, Vercel runtime limits, or the RLS policies — see the session 16 and session 18 gaps.
 
 `src/test/mockSupabase.ts` provides a small reusable chainable Supabase mock for tests that need to assert on `.eq()`/`.update()` call arguments without a live database.
 

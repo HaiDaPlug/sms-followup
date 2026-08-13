@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ReminderLog } from "@/types/clinic";
-import { isRealSend, kindFromLogStatus, needsAttention, outcomeFromLog } from "./outcome";
+import {
+  isRealSend,
+  isSentLogStatus,
+  kindFromLogStatus,
+  needsAttention,
+  outcomeFromLog
+} from "./outcome";
 
 function makeLog(overrides: Partial<ReminderLog> = {}): ReminderLog {
   return {
@@ -30,6 +36,21 @@ describe("isRealSend", () => {
     expect(isRealSend("skipped")).toBe(false);
     expect(isRealSend("unknown")).toBe(false);
     expect(isRealSend("failed")).toBe(false);
+  });
+});
+
+describe("isSentLogStatus", () => {
+  it("counts delivered as a real send, so confirmed sends are not under-reported", () => {
+    // Verification and the delivery webhook both write "delivered". Counting
+    // only the literal "sent" would exclude precisely the confirmed messages.
+    expect(isSentLogStatus("sent")).toBe(true);
+    expect(isSentLogStatus("delivered")).toBe(true);
+    expect(isSentLogStatus("dry_run")).toBe(false);
+    expect(isSentLogStatus("pending")).toBe(false);
+    expect(isSentLogStatus("unknown")).toBe(false);
+    expect(isSentLogStatus("failed")).toBe(false);
+    expect(isSentLogStatus("skipped")).toBe(false);
+    expect(isSentLogStatus("cycle_reset")).toBe(false);
   });
 });
 
@@ -76,6 +97,13 @@ describe("outcomeFromLog", () => {
     expect(outcome.kind).toBe("dry_run");
     expect(outcome.message).toContain("testläge");
     expect(isRealSend(outcome.kind)).toBe(false);
+  });
+
+  it("marks only a delivered log as provider-verified", () => {
+    // "sent" means the request was accepted; "delivered" means the provider
+    // confirmed arrival. The distinction is the point of the whole change.
+    expect(outcomeFromLog(makeLog({ status: "delivered" })).verified).toBe(true);
+    expect(outcomeFromLog(makeLog({ status: "sent" })).verified).toBe(false);
   });
 
   it("carries the sequence number into the operator-facing message", () => {

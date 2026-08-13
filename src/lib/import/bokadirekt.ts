@@ -208,7 +208,11 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
       booking_at: row.booking_at,
       treatment: row.treatment,
       status: row.status,
-      cancelled: /cancelled|avbokad/i.test(row.status),
+      // Use the shared predicate, not a narrower inline regex: the metadata
+      // recalculation below and the SQL definition of last_booking_at both key
+      // off cancellation, and a status like "Avbokning" that one recognises and
+      // the other does not makes the two disagree about the same booking.
+      cancelled: isCancelledBooking(row.status),
       source: row.source,
       raw_data: row.raw_data,
       created_at: existingBooking?.created_at ?? now,
@@ -231,7 +235,14 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
   summary.reviewItemsCreated = reviewItems.length;
 
   // Recalculate last_booking_at / latest_treatment / has_future_booking
-  // using all bookings for each patient (DB bookings + new ones from this import)
+  // using all bookings for each patient (DB bookings + new ones from this import).
+  //
+  // last_booking_at is the most recent non-cancelled booking in the PAST — the
+  // same definition as patient_last_attended_booking() in migration 022. Both
+  // writers must agree: latestValidBooking() matches a booking by
+  // booking_at === last_booking_at, and when they disagree that match fails,
+  // booking_id resolves to null, and the send reservation silently lands on a
+  // different unique index than intended.
   for (const [patientId, patient] of patientMap) {
     // Combine existing DB bookings for this patient with new ones from this run
     const dbBookings = store.bookings.filter((b) => b.patient_id === patientId);
@@ -240,9 +251,11 @@ export async function importBokaDirektCsv(csvText: string): Promise<ImportSummar
     const newById = new Map(newBookings.map((b) => [b.id, b]));
     const allBookings = [...dbBookings.map((b) => newById.get(b.id) ?? b), ...newBookings.filter((b) => !dbBookings.some((d) => d.id === b.id))];
 
-    const futureBookings = allBookings.filter((b) => isFutureBooking(b.booking_at));
+    const futureBookings = allBookings.filter(
+      (b) => !b.cancelled && isFutureBooking(b.booking_at)
+    );
     const validPast = allBookings
-      .filter((b) => b.booking_at && !isFutureBooking(b.booking_at) && !isCancelledBooking(b.status))
+      .filter((b) => b.booking_at && !isFutureBooking(b.booking_at) && !b.cancelled)
       .sort((a, b) => new Date(b.booking_at!).getTime() - new Date(a.booking_at!).getTime());
 
     const latest = validPast[0];
