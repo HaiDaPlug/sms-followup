@@ -50,6 +50,16 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
+// Clock time in clinic-local terms, for the moment a booking reached us.
+// Pinned to Europe/Stockholm rather than the viewer's timezone so the value
+// matches what staff see in BokaDirekt and in the logs, from any machine.
+function formatTime(dateStr: string | null): string {
+  if (!dateStr) return "";
+  return new Date(dateStr).toLocaleTimeString("sv-SE", {
+    hour: "2-digit", minute: "2-digit", timeZone: "Europe/Stockholm"
+  });
+}
+
 export function AnalyticsChart({
   initialSeries,
   initialBookings,
@@ -302,7 +312,14 @@ export function AnalyticsChart({
               <tbody>
                 {bookings.map((b) => (
                   <tr key={b.id}>
-                    <td className="muted" style={{ whiteSpace: "nowrap" }}>{formatDate(b.recorded_at)}</td>
+                    <td className="muted" style={{ whiteSpace: "nowrap" }}>
+                      {formatDate(b.recorded_at)}
+                      {formatTime(b.recorded_at) && (
+                        <span style={{ fontSize: 12, opacity: 0.75, marginLeft: 6 }}>
+                          {formatTime(b.recorded_at)}
+                        </span>
+                      )}
+                    </td>
                     <td className="muted" style={{ whiteSpace: "nowrap" }}>{formatDate(b.booking_at)}</td>
                     <td style={{ fontWeight: 500 }}>{b.patient_name ?? <span className="muted">—</span>}</td>
                     <td className="muted">{b.treatment ?? "—"}</td>
@@ -379,7 +396,14 @@ export function AnalyticsChart({
                 {conversions.map((c) => (
                   <tr key={c.id}>
                     <td style={{ fontWeight: 500 }}>{c.patient_name ?? <span className="muted">—</span>}</td>
-                    <td className="muted" style={{ whiteSpace: "nowrap" }}>{formatDate(c.booking_effective_at)}</td>
+                    <td className="muted" style={{ whiteSpace: "nowrap" }}>
+                      {formatDate(c.booking_effective_at)}
+                      {formatTime(c.booking_effective_at) && (
+                        <span style={{ fontSize: 12, opacity: 0.75, marginLeft: 6 }}>
+                          {formatTime(c.booking_effective_at)}
+                        </span>
+                      )}
+                    </td>
                     <td className="muted" style={{ whiteSpace: "nowrap" }}>
                       {formatDate(c.reminder_log_sent_at)}
                       {c.sequence_number != null && (
