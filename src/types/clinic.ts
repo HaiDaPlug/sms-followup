@@ -265,9 +265,15 @@ export type PatientReminderStatus =
   | "Waiting"
   | "No valid booking";
 
-/** Which SMS in the sequence should be sent next, or null if none due yet / all sent */
+/** Which follow-up should be sent next, or null if none due yet / all sent */
 export type NextSequenceInfo = {
+  /** Immutable id of the step — what the send is actually keyed on. */
+  stepId: string;
+  /** Its trigger day, snapshotted onto the log. */
+  day: number;
+  /** Position in the full day-sorted list, inactive steps included. */
   sequenceNumber: number;
+  /** @deprecated Same as `day`; kept while callers migrate. */
   daysThreshold: number;
 } | null;
 

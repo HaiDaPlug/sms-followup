@@ -30,7 +30,10 @@ vi.mock("@/lib/sms/provider", () => providerMock);
 const { supabaseMock } = vi.hoisted(() => ({ supabaseMock: { from: vi.fn(), rpc: vi.fn() } }));
 vi.mock("@/lib/supabase/client", () => ({ supabase: supabaseMock }));
 
-import { processScheduledSms } from "./process";
+import { processDailyReminders, processScheduledSms } from "./process";
+
+const STEP_5 = "aaaaaaaa-0000-4000-8000-000000000005";
+const STEP_90 = "aaaaaaaa-0000-4000-8000-000000000090";
 
 function makePatient(overrides: Partial<Patient> = {}): Patient {
   return {
@@ -398,6 +401,69 @@ describe("processScheduledSms", () => {
     expect(result.failed).toBe(0);
   });
 
+  it("skips a scheduled row whose follow-up was deleted, without contacting the provider", async () => {
+    // A throw here would be recorded as "unknown" — a message that may have been
+    // sent — even though the provider was never called. It must be a clean skip.
+    const settings = makeSettings({
+      sms_steps: [{ id: STEP_5, day: 5, template: "Hej", active: true }]
+    });
+    const patient = makePatient();
+    const claimedRow = makeScheduledRow({ step_id: "deleted-step", sequence_override: null });
+    repo.claimDueScheduledSms.mockResolvedValue([claimedRow]);
+    repo.readStore.mockResolvedValue(makeStore([patient], settings));
+    repo.addReminderLog.mockResolvedValue({
+      id: "log-removed",
+      status: "skipped",
+      error: "Uppföljningen finns inte längre"
+    });
+    repo.completeScheduledSms.mockResolvedValue({ ...claimedRow, status: "skipped" });
+
+    const result = await processScheduledSms();
+
+    expect(providerMock.sendSms).not.toHaveBeenCalled();
+    expect(repo.addReminderLog).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "skipped", skip_reason: "step_removed" })
+    );
+    expect(repo.completeScheduledSms).toHaveBeenCalledWith(
+      claimedRow.id, "skipped", "log-removed", expect.stringContaining("finns inte längre")
+    );
+    expect(result.skipped).toBe(1);
+  });
+
+  it("resolves the frozen step by id and snapshots it onto the reservation", async () => {
+    const settings = makeSettings({
+      sms_steps: [
+        { id: STEP_5, day: 5, template: "Hej", active: true },
+        { id: STEP_90, day: 90, template: "Hej igen", active: true }
+      ]
+    });
+    const patient = makePatient();
+    const claimedRow = makeScheduledRow({ step_id: STEP_90, sequence_override: 2 });
+    repo.claimDueScheduledSms.mockResolvedValue([claimedRow]);
+    repo.readStore.mockResolvedValue(makeStore([patient], settings));
+
+    const reservation = {
+      id: "log-1", patient_id: patient.id, booking_id: null,
+      phone: patient.normalized_phone, message: "Frozen message", status: "pending",
+      sequence_number: 2, step_id: STEP_90, step_day: 90, is_cycle_reset: false,
+      provider_message_id: null, skip_reason: null, error: null, sent_at: null,
+      created_at: "2026-01-01T00:00:00.000Z"
+    };
+    const chain = makeSupabaseChain({ data: reservation, error: null });
+    supabaseMock.from.mockReturnValue(chain);
+    repo.linkScheduledSmsReservation.mockResolvedValue(undefined);
+    providerMock.sendSms.mockResolvedValue({ success: true, providerMessageId: "elks-1" });
+    repo.updateReminderLog.mockResolvedValue({ ...reservation, status: "sent" });
+    repo.completeScheduledSms.mockResolvedValue({ ...claimedRow, status: "sent" });
+
+    const result = await processScheduledSms();
+
+    expect(chain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ step_id: STEP_90, step_day: 90, sequence_number: 2 })
+    );
+    expect(result.sent).toBe(1);
+  });
+
   it("classifies provider network uncertainty as unknown, never a definite failure", async () => {
     const settings = makeSettings({ dry_run_mode: false });
     const patient = makePatient();
@@ -442,5 +508,89 @@ describe("processScheduledSms", () => {
     );
     expect(result.unknown).toBe(1);
     expect(result.failed).toBe(0);
+  });
+});
+
+describe("processDailyReminders", () => {
+  const steps = [
+    { id: STEP_5, day: 5, template: "Hej {{firstName}}", active: true },
+    { id: STEP_90, day: 90, template: "Hej igen {{firstName}}", active: true }
+  ];
+
+  function readyPatient(id: string, daysSinceBooking: number): Patient {
+    return makePatient({
+      id,
+      full_name: `Patient ${id}`,
+      last_booking_at: new Date(Date.now() - daysSinceBooking * 86_400_000).toISOString()
+    });
+  }
+
+  /**
+   * processDailyReminders reconciles stale pending deliveries before it sends,
+   * which queries reminder_logs directly; that lookup must yield an empty list
+   * so the run reaches the queue.
+   */
+  function mockNoStalePending(reservation: Record<string, unknown>) {
+    supabaseMock.from.mockImplementation((table: string) => {
+      if (table === "reminder_logs") {
+        const chain = makeSupabaseChain({ data: reservation, error: null });
+        // The reconcile path ends at .lt(); the send path ends at .single().
+        chain.lt = vi.fn(async () => ({ data: [], error: null }));
+        return chain;
+      }
+      return makeSupabaseChain({ data: reservation, error: null });
+    });
+  }
+
+  it("sends to the patients who have waited longest, not the ones loaded first", async () => {
+    // The cap used to fall on readStore()'s created_at desc ordering, handing
+    // every slot to the newest records. Store order here is deliberately the
+    // reverse of the correct queue order.
+    const settings = makeSettings({ sms_steps: steps, max_per_day: 2, dry_run_mode: true });
+    const patients = [
+      readyPatient("newest", 6),
+      readyPatient("middle", 100),
+      readyPatient("oldest", 400)
+    ];
+    repo.getSettings.mockResolvedValue(settings);
+    repo.readStore.mockResolvedValue(makeStore(patients, settings));
+    repo.getActiveScheduledSmsPatientIds.mockResolvedValue(new Set<string>());
+    repo.bulkUpsertPatients.mockResolvedValue(undefined);
+    repo.insertDailySnapshot.mockResolvedValue(undefined);
+    mockNoStalePending({ id: "log-x", status: "dry_run", sequence_number: 1, step_id: STEP_5, step_day: 5 });
+    supabaseMock.rpc.mockResolvedValue({ data: null, error: null });
+
+    const result = await processDailyReminders();
+
+    expect(result.processed).toBe(2);
+    expect(result.results?.map((r) => r.patientId)).toEqual(["oldest", "middle"]);
+    // "newest" stays eligible for a later run rather than being dropped.
+    expect(result.results?.some((r) => r.patientId === "newest")).toBe(false);
+  });
+
+  it("reports how overdue each sent patient was", async () => {
+    const settings = makeSettings({ sms_steps: steps, max_per_day: 1, dry_run_mode: true });
+    repo.getSettings.mockResolvedValue(settings);
+    repo.readStore.mockResolvedValue(makeStore([readyPatient("p1", 400)], settings));
+    repo.getActiveScheduledSmsPatientIds.mockResolvedValue(new Set<string>());
+    repo.bulkUpsertPatients.mockResolvedValue(undefined);
+    repo.insertDailySnapshot.mockResolvedValue(undefined);
+    mockNoStalePending({ id: "log-x", status: "dry_run", sequence_number: 2, step_id: STEP_90, step_day: 90 });
+    supabaseMock.rpc.mockResolvedValue({ data: null, error: null });
+
+    const result = await processDailyReminders();
+
+    // Due since day 5, contacted on day 400.
+    expect(result.results?.[0].overdueDays).toBe(395);
+    expect(result.results?.[0].stepId).toBe(STEP_90);
+    expect(result.results?.[0].stepDay).toBe(90);
+  });
+
+  it("sends nothing when the automation is switched off", async () => {
+    repo.getSettings.mockResolvedValue(makeSettings({ is_active: false }));
+    mockNoStalePending({});
+    const result = await processDailyReminders();
+    expect(result.processed).toBe(0);
+    expect(repo.readStore).not.toHaveBeenCalled();
   });
 });

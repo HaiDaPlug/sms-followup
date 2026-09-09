@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { ScheduledSms } from "@/types/clinic";
+import type { ScheduledSms, SmsStep } from "@/types/clinic";
 
 export type ScheduledSmsRow = ScheduledSms & {
   patientName: string | null;
@@ -32,13 +32,22 @@ function formatScheduled(iso: string) {
   return new Intl.DateTimeFormat("sv-SE", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
 }
 
-function contentLabel(row: ScheduledSmsRow) {
+function contentLabel(row: ScheduledSmsRow, steps: SmsStep[]) {
+  const step = row.step_id ? steps.find((s) => s.id === row.step_id) : undefined;
+  if (step) return `${step.day} dagar`;
+  // Rows scheduled before follow-ups had ids, or whose step has been deleted.
   if (row.sequence_override != null) return `SMS ${row.sequence_override}`;
   if (row.message_override) return "Fryst meddelande";
   return "Automatisk";
 }
 
-export function ScheduledSmsClient({ initialRows }: { initialRows: ScheduledSmsRow[] }) {
+export function ScheduledSmsClient({
+  initialRows,
+  steps = [],
+}: {
+  initialRows: ScheduledSmsRow[];
+  steps?: SmsStep[];
+}) {
   const [rows, setRows] = useState(initialRows);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [errorId, setErrorId] = useState<string | null>(null);
@@ -157,7 +166,7 @@ export function ScheduledSmsClient({ initialRows }: { initialRows: ScheduledSmsR
                 <span className="ss-date">{formatScheduled(row.scheduled_for)}</span>
               </div>
               <div className="ss-cell">
-                <span className="ss-content">{contentLabel(row)}</span>
+                <span className="ss-content">{contentLabel(row, steps)}</span>
               </div>
               <div className="ss-cell" style={{ borderLeft: "1px solid var(--border)" }}>
                 <span className={`badge ${badgeClass(row.status)}`}>{statusLabels[row.status] ?? row.status}</span>

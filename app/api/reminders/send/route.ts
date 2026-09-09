@@ -4,11 +4,18 @@ import { sendReminderToPatient } from "@/lib/reminders/process";
 import { outcomeFromLog, type SendOutcome } from "@/lib/sms/outcome";
 
 export async function POST(request: Request) {
-  let body: { patientId?: string; sequenceOverride?: number; forceNext?: boolean };
+  let body: { patientId?: string; stepId?: string; sequenceOverride?: number; forceNext?: boolean };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Ogiltig JSON" }, { status: 400 });
+  }
+
+  // A page loaded before follow-ups had ids would send a position here. Treating
+  // it as "no step chosen" would quietly send a different message than the
+  // operator picked, so refuse rather than guess.
+  if (body.sequenceOverride !== undefined) {
+    return NextResponse.json({ error: "Ladda om sidan och försök igen" }, { status: 400 });
   }
 
   const store = await readStore();
@@ -19,7 +26,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const log = await sendReminderToPatient(patient, store, false, body.sequenceOverride, body.forceNext ?? false);
+    const log = await sendReminderToPatient(patient, store, false, body.stepId, body.forceNext ?? false);
     const outcome = outcomeFromLog(log);
 
     // A deliberate skip is a successful request whose send was refused, so it

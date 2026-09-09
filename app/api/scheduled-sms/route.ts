@@ -24,6 +24,7 @@ export async function POST(request: Request) {
   let body: {
     patientId?: string;
     scheduledFor?: string;
+    stepId?: string;
     sequenceOverride?: number;
     timeZone?: string;
   };
@@ -31,6 +32,12 @@ export async function POST(request: Request) {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Ogiltig JSON" }, { status: 400 });
+  }
+
+  // A stale tab would send a position; refuse rather than schedule a different
+  // step than the operator picked (see /api/reminders/send).
+  if (body.sequenceOverride !== undefined) {
+    return NextResponse.json({ error: "Ladda om sidan och försök igen" }, { status: 400 });
   }
 
   if (!body.patientId || !body.scheduledFor) {
@@ -74,11 +81,8 @@ export async function POST(request: Request) {
     }
 
     const steps = resolveSteps(settings);
-    if (
-      body.sequenceOverride !== undefined &&
-      (!Number.isInteger(body.sequenceOverride) || body.sequenceOverride < 1 || body.sequenceOverride > steps.length)
-    ) {
-      return NextResponse.json({ error: "Ogiltigt mallval" }, { status: 400 });
+    if (body.stepId !== undefined && !steps.some((step) => step.id === body.stepId)) {
+      return NextResponse.json({ error: "Ogiltigt val av uppföljning" }, { status: 400 });
     }
 
     // Range alone is not enough: picking a step that has already been sent in
@@ -86,10 +90,10 @@ export async function POST(request: Request) {
     // operator the reason immediately instead of surfacing it as a silent skip
     // when the job fires, possibly months later. The send path re-checks too,
     // since the cycle can advance in between.
-    if (body.sequenceOverride !== undefined) {
+    if (body.stepId !== undefined) {
       const orderError = validateSequenceOrder(
         patient.id,
-        body.sequenceOverride,
+        body.stepId,
         settings,
         store.reminder_logs
       );
@@ -98,14 +102,17 @@ export async function POST(request: Request) {
       }
     }
 
-    const next = body.sequenceOverride !== undefined
-      ? { sequenceNumber: body.sequenceOverride }
+    const chosen = body.stepId !== undefined
+      ? steps.find((step) => step.id === body.stepId)!
+      : null;
+    const next = chosen
+      ? { stepId: chosen.id, day: chosen.day, sequenceNumber: steps.indexOf(chosen) + 1 }
       : getNextSchedulableSequence(patient, settings, store.reminder_logs);
     if (!next) {
       return NextResponse.json({ error: "Det finns inget återstående SMS att schemalägga" }, { status: 409 });
     }
 
-    const template = steps[next.sequenceNumber - 1]?.template;
+    const template = steps.find((step) => step.id === next.stepId)?.template;
     if (!template) {
       return NextResponse.json({ error: "Den valda SMS-mallen finns inte" }, { status: 400 });
     }
@@ -127,7 +134,7 @@ export async function POST(request: Request) {
       sequence_override: next.sequenceNumber,
       // Both: the position keeps the pre-025 readers working, the id survives a
       // later re-ordering of the step list.
-      step_id: steps[next.sequenceNumber - 1]?.id ?? null,
+      step_id: next.stepId,
       message_override: message,
       scheduled_for: scheduledDate.toISOString()
     });

@@ -12,14 +12,15 @@ import { defaultMessage, type SendOutcome, type SendOutcomeKind } from "./outcom
 
 export type SendRequest = {
   patientId: string;
-  sequenceOverride?: number;
+  /** Follow-up step id, when the operator picked one explicitly. */
+  stepId?: string;
   forceNext?: boolean;
 };
 
 /** Never throws: transport problems come back as an `unknown` outcome. */
 export async function requestSend(request: SendRequest): Promise<SendOutcome> {
   const body: SendRequest = { patientId: request.patientId, forceNext: request.forceNext ?? true };
-  if (request.sequenceOverride !== undefined) body.sequenceOverride = request.sequenceOverride;
+  if (request.stepId !== undefined) body.stepId = request.stepId;
 
   let response: Response;
   try {
