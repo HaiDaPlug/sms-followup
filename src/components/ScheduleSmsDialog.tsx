@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import type { TemplateStep } from "./PatientActions";
+import type { SmsStep } from "@/types/clinic";
 import { useToast } from "./ToastProvider";
 
 interface Props {
   patientId: string;
-  steps: TemplateStep[];
+  steps: SmsStep[];
   onClose: () => void;
   onScheduled: () => void;
 }

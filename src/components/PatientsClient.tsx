@@ -2,11 +2,11 @@
 
 import { useState, useCallback } from "react";
 import { PatientSmsPopup } from "@/components/PatientSmsPopup";
-import { PatientActions, type TemplateStep } from "@/components/PatientActions";
+import { PatientActions } from "@/components/PatientActions";
 import { useToast } from "@/components/ToastProvider";
 import { isRealSend } from "@/lib/sms/outcome";
 import { requestSend } from "@/lib/sms/sendClient";
-import type { Patient, ReminderLog } from "@/types/clinic";
+import type { Patient, ReminderLog, SmsStep } from "@/types/clinic";
 
 export type PatientRow = {
   patient: Patient;
@@ -65,7 +65,7 @@ function patientDisplayName(p: Patient) {
   return p.full_name;
 }
 
-export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps?: TemplateStep[] }) {
+export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps?: SmsStep[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkState, setBulkState] = useState<BulkState>("idle");
   const [progress, setProgress] = useState({ done: 0, total: 0 });

@@ -2,8 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import type { ReminderSettings, SmsStep } from "@/types/clinic";
-import { resolveSteps } from "@/lib/reminders/steps";
+import type { ReminderSettings, StoredSmsStep } from "@/types/clinic";
+import { stepsForEditing } from "@/lib/reminders/steps";
 
 const VARIABLES_HINT = "{{firstName}} / {{förnamn}}  {{fullName}}  {{lastBookingDate}}  {{bookingLink}}  {{clinicName}}";
 
@@ -396,9 +396,9 @@ function StepCard({
   onRemove,
 }: {
   index: number;
-  step: SmsStep;
+  step: StoredSmsStep;
   total: number;
-  onChange: (s: SmsStep) => void;
+  onChange: (s: StoredSmsStep) => void;
   onRemove: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -481,13 +481,15 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
   const [busy, setBusy] = useState(false);
   const [dryRun, setDryRun] = useState(settings.dry_run_mode);
   const [sameNumberOverride, setSameNumberOverride] = useState(settings.allow_same_number_override ?? false);
-  const [steps, setSteps] = useState<SmsStep[]>(() => resolveSteps(settings));
+  // Seeded from the stored steps as-is so ids round-trip untouched; a resolver
+  // fallback id must never be persisted by a save.
+  const [steps, setSteps] = useState<StoredSmsStep[]>(() => stepsForEditing(settings));
   const [clinicName, setClinicName] = useState(settings.clinic_name);
   const [bookingLink, setBookingLink] = useState(settings.booking_link);
   const [sendTime, setSendTime] = useState(settings.send_time);
   const [maxPerDay, setMaxPerDay] = useState(settings.max_per_day);
 
-  function updateStep(i: number, s: SmsStep) {
+  function updateStep(i: number, s: StoredSmsStep) {
     setSteps((prev) => prev.map((x, idx) => (idx === i ? s : x)));
   }
 
@@ -497,7 +499,8 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
 
   function addStep() {
     const lastDay = steps[steps.length - 1]?.day ?? 0;
-    setSteps((prev) => [...prev, { day: lastDay + 30, template: "" }]);
+    // A new step gets its identity here, once, for life.
+    setSteps((prev) => [...prev, { id: crypto.randomUUID(), day: lastDay + 30, template: "", active: true }]);
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -533,7 +536,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
     if (response.ok) {
       const saved = await response.json() as ReminderSettings;
       // Sync all state from the confirmed-saved server response
-      const savedSteps = resolveSteps(saved);
+      const savedSteps = stepsForEditing(saved);
       setSteps(savedSteps);
       setClinicName(saved.clinic_name);
       setBookingLink(saved.booking_link);
@@ -550,8 +553,11 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
       }
       router.refresh();
     } else {
+      // The server explains most rejections (for example a stale tab); show it
+      // instead of a generic failure when it does.
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
       setMessageType("error");
-      setMessage("Kunde inte spara.");
+      setMessage(payload.error ? `Kunde inte spara: ${payload.error}` : "Kunde inte spara.");
     }
   }
 
@@ -609,7 +615,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
 
         {steps.map((step, i) => (
           <StepCard
-            key={i}
+            key={step.id ?? i}
             index={i}
             step={step}
             total={steps.length}

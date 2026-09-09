@@ -6,10 +6,9 @@ import { ScheduleSmsDialog } from "./ScheduleSmsDialog";
 import { useToast } from "./ToastProvider";
 import { isRealSend } from "@/lib/sms/outcome";
 import { requestSend } from "@/lib/sms/sendClient";
+import type { SmsStep } from "@/types/clinic";
 
 type SendState = "idle" | "sending" | "sent" | "failed";
-
-export type TemplateStep = { day: number; template: string };
 
 const styles = `
 @keyframes pa-spin { to { transform: rotate(360deg); } }
@@ -197,7 +196,7 @@ export function PatientActions({
 }: {
   patientId: string;
   doNotContact?: boolean;
-  steps?: TemplateStep[];
+  steps?: SmsStep[];
 }) {
   const [sendState, setSendState] = useState<SendState>("idle");
   const [sendError, setSendError] = useState<string | null>(null);

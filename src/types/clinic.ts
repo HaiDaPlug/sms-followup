@@ -71,9 +71,28 @@ export type Booking = {
   updated_at: string;
 };
 
-export type SmsStep = {
+/**
+ * A follow-up step as stored in reminder_settings.sms_steps. `id` and `active`
+ * are optional only because rows written before migration 025 lack them; the
+ * settings route and migration 025 fill them in, and resolveSteps() never
+ * hands the engine a step without both.
+ */
+export type StoredSmsStep = {
+  id?: string;
   day: number;
   template: string;
+  active?: boolean;
+};
+
+/** A follow-up step as resolved for the engine and the UI. */
+export type SmsStep = {
+  /** Stable, immutable UUID. Historical logs reference this, never the array position. */
+  id: string;
+  /** Days after the patient's latest valid booking at which this step is due. */
+  day: number;
+  template: string;
+  /** Inactive steps are skipped by the daily automation but stay selectable manually. */
+  active: boolean;
 };
 
 export type ReminderSettings = {
@@ -85,8 +104,8 @@ export type ReminderSettings = {
   sms_template: string;
   sms_template_2: string;
   sms_template_3: string;
-  /** Variable-length sequence: [{day, template}, ...] sorted by day ascending */
-  sms_steps: SmsStep[] | null;
+  /** Variable-length sequence: [{id, day, template, active}, ...] sorted by day ascending */
+  sms_steps: StoredSmsStep[] | null;
   booking_link: string;
   clinic_name: string;
   is_active: boolean;
