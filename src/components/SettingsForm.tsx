@@ -386,7 +386,7 @@ function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
   );
 }
 
-// ── Single SMS step card ──────────────────────────────────────────────────────
+// ── Single follow-up card ─────────────────────────────────────────────────────
 
 function StepCard({
   index,
@@ -421,13 +421,27 @@ function StepCard({
     });
   }
 
+  const active = step.active ?? true;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, opacity: active ? 1 : 0.55 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)" }}>
-          SMS {index + 1} —
+          Uppföljning {index + 1} —
         </span>
         <DayChip value={step.day} onChange={(day) => onChange({ ...step, day })} />
+        <label
+          style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 14, color: "var(--text-muted)", cursor: "pointer" }}
+          title="Inaktiva uppföljningar skickas inte automatiskt, men kan fortfarande väljas manuellt."
+        >
+          <input
+            type="checkbox"
+            checked={active}
+            onChange={(e) => onChange({ ...step, active: e.target.checked })}
+            style={{ width: 14, height: 14, accentColor: "var(--accent)", cursor: "pointer" }}
+          />
+          Aktiv
+        </label>
         {total > 1 && (
           <button
             type="button"
@@ -444,6 +458,10 @@ function StepCard({
             Ta bort
           </button>
         )}
+      </div>
+      <div style={{ fontSize: 14, color: "var(--text-muted)" }}>
+        Skickas {step.day} dagar efter patientens senaste besök
+        {active ? "" : " — pausad"}
       </div>
       <textarea
         ref={textareaRef}
@@ -609,9 +627,15 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
       {/* ── SMS-mallar ── */}
       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: "none", padding: "24px 28px", display: "grid", gap: 24 }}>
         <SectionHeader
-          title="SMS-mallar"
-          description="Ett meddelande per steg. Klicka på dagen för att ändra när det skickas."
+          title="Automatiska uppföljningar"
+          description="Kontakta automatiskt patienter som inte har återkommit efter en viss tid. Klicka på dagen för att ändra när uppföljningen skickas."
         />
+
+        {steps.length > 0 && steps.every((step) => step.active === false) && (
+          <div className="notice" style={{ fontSize: 14 }}>
+            Inga uppföljningar är aktiva — inget skickas automatiskt.
+          </div>
+        )}
 
         {steps.map((step, i) => (
           <StepCard
@@ -630,7 +654,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
           onClick={addStep}
           style={{ alignSelf: "flex-start", fontSize: 14 }}
         >
-          + Lägg till steg
+          + Lägg till uppföljning
         </button>
       </div>
 
@@ -661,7 +685,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
         }}>
           <input defaultChecked={settings.is_active} name="is_active" type="checkbox" style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }} />
           <div>
-            <div style={{ fontWeight: 600, fontSize: 16, color: "var(--text)" }}>Aktivera automatiska påminnelser</div>
+            <div style={{ fontWeight: 600, fontSize: 16, color: "var(--text)" }}>Aktivera automatiska uppföljningar</div>
             <div style={{ fontSize: 14, color: "var(--text-muted)", marginTop: 2 }}>Daglig körning sker klockan {sendTime} om detta är aktiverat.</div>
           </div>
         </label>

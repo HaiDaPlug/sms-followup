@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import type { AnalyticsBookingRow, AnalyticsConversionRow } from "@/lib/analytics/getAnalyticsData";
+import type { LifetimeStats } from "@/lib/analytics/lifetime";
 import { ATTRIBUTION_WINDOWS, type AttributionDays } from "@/lib/analytics/attributionWindow";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
@@ -24,6 +25,7 @@ interface Props {
   initialDays: number;
   initialAttributionDays: AttributionDays;
   initialConversionsOutsideWindow: number;
+  initialLifetime: LifetimeStats;
 }
 
 const PERIOD_OPTIONS = [
@@ -53,6 +55,10 @@ function formatDate(dateStr: string | null): string {
 // Clock time in clinic-local terms, for the moment a booking reached us.
 // Pinned to Europe/Stockholm rather than the viewer's timezone so the value
 // matches what staff see in BokaDirekt and in the logs, from any machine.
+function formatPercent(rate: number): string {
+  return `${Math.round(rate * 100)} %`;
+}
+
 function formatTime(dateStr: string | null): string {
   if (!dateStr) return "";
   return new Date(dateStr).toLocaleTimeString("sv-SE", {
@@ -71,6 +77,7 @@ export function AnalyticsChart({
   initialDays,
   initialAttributionDays,
   initialConversionsOutsideWindow,
+  initialLifetime,
 }: Props) {
   const [days, setDays] = useState(initialDays);
   const [attributionDays, setAttributionDays] = useState<AttributionDays>(initialAttributionDays);
@@ -84,6 +91,7 @@ export function AnalyticsChart({
   const [smsSentCount, setSmsSentCount] = useState(initialSmsSentCount);
   const [smsPatientCount, setSmsPatientCount] = useState(initialSmsPatientCount);
   const [conversionRate, setConversionRate] = useState(initialConversionRate);
+  const [lifetime, setLifetime] = useState(initialLifetime);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -114,6 +122,7 @@ export function AnalyticsChart({
         smsPatientCount: number;
         conversionRate: number | null;
         conversionsOutsideWindow: number;
+        lifetime: LifetimeStats;
       };
       setDays(d);
       setAttributionDays(attribution);
@@ -125,6 +134,8 @@ export function AnalyticsChart({
       setSmsPatientCount(data.smsPatientCount);
       setConversionRate(data.conversionRate);
       setConversionsOutsideWindow(data.conversionsOutsideWindow);
+      // Period-independent, but the attribution columns follow the picker.
+      setLifetime(data.lifetime);
     } catch (error) {
       if ((error as Error)?.name === "AbortError") return; // superseded — keep the newer request's state
       console.error("Failed to load analytics period", error);
@@ -285,6 +296,151 @@ export function AnalyticsChart({
         </div>
       </div>
 
+      {/* All-time performance — independent of the period selector above */}
+      <div className="card" style={{ padding: 0, marginTop: 20 }}>
+        <div style={{ padding: "16px 16px 0" }}>
+          <h4 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 8, margin: 0 }}>
+            Sedan start
+            <span style={{ fontFamily: "var(--font-body)", fontWeight: 400, fontSize: 14, color: "var(--text-muted)" }}>
+              alla bokningar, inkl. import
+            </span>
+          </h4>
+        </div>
+
+        <div className="an-stats">
+          <div>
+            <p className="metric">SMS skickade</p>
+            <p className="metric-value" style={{ fontSize: 28, color: lifetime.smsSent === 0 ? "var(--text-faint)" : "var(--text)" }}>
+              {lifetime.smsSent}
+            </p>
+          </div>
+          <div>
+            <p className="metric">Kunder kontaktade</p>
+            <p className="metric-value" style={{ fontSize: 28, color: lifetime.patientsContacted === 0 ? "var(--text-faint)" : "var(--text)" }}>
+              {lifetime.patientsContacted}
+            </p>
+          </div>
+          <div>
+            <p className="metric" title="Kunder som bokade om någon gång efter ett SMS, oavsett hur lång tid det tog.">
+              Bokade igen
+            </p>
+            <p className="metric-value" style={{ fontSize: 28, color: lifetime.patientsRebooked === 0 ? "var(--text-faint)" : "var(--text)" }}>
+              {lifetime.patientsRebooked}
+            </p>
+            {lifetime.eventualRate !== null && (
+              <p className="metric" style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                {formatPercent(lifetime.eventualRate)} av kontaktade
+              </p>
+            )}
+          </div>
+          <div>
+            <p className="metric" title={`Bokade om inom ${attributionDays} dagar efter utskicket — nära nog i tid för att rimligen tillskrivas SMS:et.`}>
+              Inom {attributionDays} d
+            </p>
+            <p className="metric-value" style={{ fontSize: 28, color: lifetime.attributedPatients === 0 ? "var(--text-faint)" : "var(--text)" }}>
+              {lifetime.attributedPatients}
+            </p>
+            {lifetime.attributedRate !== null && (
+              <p className="metric" style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                {formatPercent(lifetime.attributedRate)} av kontaktade
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: "14px 16px 18px", borderTop: "1px solid var(--border)" }}>
+          <p style={{ fontSize: 14, color: "var(--text-muted)", margin: 0 }}>
+            {lifetime.patientsContacted} kontaktade → {lifetime.patientsRebooked} bokade igen →{" "}
+            {lifetime.attributedPatients} inom {attributionDays} dagar
+          </p>
+          {lifetime.patientsContacted > 0 && lifetime.patientsContacted < 50 && (
+            <p style={{ fontSize: 14, color: "var(--text-faint)", margin: "6px 0 0" }}>
+              Litet underlag — läs siffrorna som riktning, inte mätning.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Per follow-up + time to rebooking */}
+      <div className="analytics-bottom-grid">
+        <div>
+          <h4 className="section-title">Resultat per uppföljning</h4>
+          <p style={{ fontSize: 14, color: "var(--text-muted)", margin: "0 0 8px" }}>
+            Varje ombokning krediteras den senaste uppföljningen före bokningen.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Uppföljning</th>
+                  <th>Skickade</th>
+                  <th>Kunder</th>
+                  <th>Bokade igen</th>
+                  <th>Andel</th>
+                  <th>Inom {attributionDays} d</th>
+                  <th>Median</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lifetime.perStep.length === 0 ? (
+                  <tr><td colSpan={7} className="muted">Inga uppföljningar konfigurerade.</td></tr>
+                ) : (
+                  lifetime.perStep.map((step) => (
+                    <tr key={step.key}>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {step.label}
+                        {step.exists && !step.active && (
+                          <span className="badge waiting" style={{ marginLeft: 6 }}>inaktiv</span>
+                        )}
+                      </td>
+                      <td className="muted">{step.smsSent}</td>
+                      <td className="muted">{step.patientsContacted}</td>
+                      <td className="muted">{step.rebookedPatients}</td>
+                      <td className="muted">{step.eventualRate === null ? "—" : formatPercent(step.eventualRate)}</td>
+                      <td className="muted">{step.attributed}</td>
+                      <td className="muted">{step.medianDays === null ? "—" : `${step.medianDays} d`}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <h4 className="section-title">Tid till ombokning</h4>
+          <p style={{ fontSize: 14, color: "var(--text-muted)", margin: "0 0 8px" }}>
+            Hur lång tid det tog innan kunden bokade om efter ett SMS.
+          </p>
+          {lifetime.distribution.every((b) => b.count === 0) ? (
+            <div className="empty-state">Inga ombokningar efter SMS ännu.</div>
+          ) : (
+            <div style={{ display: "grid", gap: 8 }}>
+              {lifetime.distribution.map((bucket) => {
+                const max = Math.max(...lifetime.distribution.map((b) => b.count), 1);
+                return (
+                  <div key={bucket.label} style={{ display: "grid", gridTemplateColumns: "104px 1fr 34px", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 14, color: "var(--text-muted)" }}>{bucket.label}</span>
+                    <span style={{ background: "var(--surface-sub)", borderRadius: 3, height: 10, overflow: "hidden" }}>
+                      <span style={{
+                        display: "block",
+                        height: "100%",
+                        width: `${(bucket.count / max) * 100}%`,
+                        background: COLOR_BOOKINGS,
+                        transition: "width 200ms",
+                      }} />
+                    </span>
+                    <span style={{ fontSize: 14, color: bucket.count === 0 ? "var(--text-faint)" : "var(--text)", textAlign: "right" }}>
+                      {bucket.count}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Bottom: bookings + SMS-matched bookings */}
       <div className="analytics-bottom-grid">
 
@@ -406,7 +562,11 @@ export function AnalyticsChart({
                     </td>
                     <td className="muted" style={{ whiteSpace: "nowrap" }}>
                       {formatDate(c.reminder_log_sent_at)}
-                      {c.sequence_number != null && (
+                      {/* Named by the follow-up's trigger day; the position is
+                          only meaningful against the step list of the day. */}
+                      {c.step_day != null ? (
+                        <span className="badge" style={{ fontSize: 12, marginLeft: 6 }}>{c.step_day} dagar</span>
+                      ) : c.sequence_number != null && (
                         <span className="badge" style={{ fontSize: 12, marginLeft: 6 }}>steg {c.sequence_number}</span>
                       )}
                     </td>
