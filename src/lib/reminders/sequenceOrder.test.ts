@@ -45,6 +45,8 @@ function makeLog(overrides: Partial<ReminderLog> = {}): ReminderLog {
     message: "",
     status: "sent",
     sequence_number: 1,
+    step_id: null,
+    step_day: null,
     is_cycle_reset: false,
     provider_message_id: null,
     skip_reason: null,

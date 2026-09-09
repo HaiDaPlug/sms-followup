@@ -40,6 +40,8 @@ const reservation: ReminderLog = {
   message: "Ny text",
   status: "pending",
   sequence_number: 2,
+  step_id: null,
+  step_day: null,
   is_cycle_reset: false,
   provider_message_id: null,
   skip_reason: null,

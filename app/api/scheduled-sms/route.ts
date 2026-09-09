@@ -125,6 +125,9 @@ export async function POST(request: Request) {
       patient_name: patient.full_name,
       recipient_phone: patient.normalized_phone,
       sequence_override: next.sequenceNumber,
+      // Both: the position keeps the pre-025 readers working, the id survives a
+      // later re-ordering of the step list.
+      step_id: steps[next.sequenceNumber - 1]?.id ?? null,
       message_override: message,
       scheduled_for: scheduledDate.toISOString()
     });

@@ -32,6 +32,20 @@ function templateForSequence(settings: ReminderSettings, seq: number): string {
   return steps[seq - 1]?.template ?? settings.sms_template;
 }
 
+/**
+ * The step a 1-based sequence position refers to, or null when the position no
+ * longer exists. Every log row snapshots the id and the day so history keeps
+ * its meaning after the step list is re-ordered, re-timed, or trimmed.
+ */
+function stepSnapshot(
+  settings: ReminderSettings,
+  seq: number | null
+): { step_id: string | null; step_day: number | null } {
+  if (seq === null) return { step_id: null, step_day: null };
+  const step = resolveSteps(settings)[seq - 1];
+  return { step_id: step?.id ?? null, step_day: step?.day ?? null };
+}
+
 function toSkipReason(status: string): SkipReason {
   switch (status) {
     case "Future booking":    return "future_booking";
@@ -57,6 +71,8 @@ async function addDuplicateReservationLog(
     message: "",
     status: "skipped",
     sequence_number: null,
+    step_id: null,
+    step_day: null,
     is_cycle_reset: false,
     provider_message_id: null,
     skip_reason: "sequence_complete",
@@ -177,6 +193,8 @@ export async function sendReminderToPatient(
         message: "",
         status: "skipped",
         sequence_number: null,
+        step_id: null,
+        step_day: null,
         is_cycle_reset: false,
         provider_message_id: null,
         skip_reason: toSkipReason(status),
@@ -194,6 +212,8 @@ export async function sendReminderToPatient(
         message: "",
         status: "skipped",
         sequence_number: null,
+        step_id: null,
+        step_day: null,
         is_cycle_reset: false,
         provider_message_id: null,
         skip_reason: toSkipReason(status),
@@ -217,6 +237,8 @@ export async function sendReminderToPatient(
       message: "",
       status: "skipped",
       sequence_number: null,
+      step_id: null,
+      step_day: null,
       is_cycle_reset: false,
       provider_message_id: null,
       skip_reason: "sequence_complete",
@@ -245,6 +267,7 @@ export async function sendReminderToPatient(
         message: "",
         status: "skipped",
         sequence_number: sequenceOverride,
+        ...stepSnapshot(settings, sequenceOverride),
         is_cycle_reset: false,
         provider_message_id: null,
         skip_reason: "out_of_order",
@@ -270,6 +293,7 @@ export async function sendReminderToPatient(
         patient_id: patient.id,
         phone: patient.normalized_phone,
         sequence_number: next.sequenceNumber,
+        ...stepSnapshot(settings, next.sequenceNumber),
         rendered_message: message,
         booking_id: latest?.id ?? null,
       },
@@ -281,6 +305,8 @@ export async function sendReminderToPatient(
       message,
       status: "skipped",
       sequence_number: null,
+      step_id: null,
+      step_day: null,
       is_cycle_reset: false,
       provider_message_id: null,
       skip_reason: "unresolved_placeholder",
@@ -300,6 +326,7 @@ export async function sendReminderToPatient(
         message,
         status: "dry_run",
         sequence_number: next.sequenceNumber,
+        ...stepSnapshot(settings, next.sequenceNumber),
         is_cycle_reset: false,
         provider_message_id: null,
         skip_reason: null,
@@ -330,6 +357,7 @@ export async function sendReminderToPatient(
       message,
       status: "pending",
       sequence_number: next.sequenceNumber,
+      ...stepSnapshot(settings, next.sequenceNumber),
       is_cycle_reset: false,
       provider_message_id: null,
       skip_reason: null,
@@ -374,6 +402,7 @@ export async function sendReminderToPatient(
         patient_id: patient.id,
         phone: patient.normalized_phone,
         sequence_number: next.sequenceNumber,
+        ...stepSnapshot(settings, next.sequenceNumber),
         rendered_message: message,
         booking_id: bookingId,
       },
@@ -394,6 +423,7 @@ export async function sendReminderToPatient(
         patient_id: patient.id,
         phone: patient.normalized_phone,
         sequence_number: next.sequenceNumber,
+        ...stepSnapshot(settings, next.sequenceNumber),
         rendered_message: message,
         booking_id: bookingId,
       },
@@ -558,6 +588,9 @@ export async function processScheduledSms() {
       // belongs to a booking cycle the patient has since moved on from.
       if (isStaleScheduledSend(scheduled, patient, store.bookings)) {
         const error = "Avbruten: patienten har bokat en ny tid sedan SMS:et schemalades";
+        // The row's own frozen step, not a re-resolution: it is the step this
+        // schedule was created for, even if the list has moved on since.
+        const scheduledStep = stepSnapshot(store.reminder_settings[0], scheduled.sequence_override);
         const log = await addReminderLog({
           patient_id: patient.id,
           booking_id: scheduled.booking_id,
@@ -565,6 +598,8 @@ export async function processScheduledSms() {
           message: "",
           status: "skipped",
           sequence_number: scheduled.sequence_override,
+          step_id: scheduled.step_id ?? scheduledStep.step_id,
+          step_day: scheduledStep.step_day,
           is_cycle_reset: false,
           provider_message_id: null,
           skip_reason: "stale_cycle",

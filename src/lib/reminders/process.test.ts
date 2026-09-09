@@ -81,6 +81,7 @@ function makeScheduledRow(overrides: Partial<ScheduledSms> = {}): ScheduledSms {
     patient_name: "Anna Andersson",
     recipient_phone: "+46701234567",
     sequence_override: 1,
+    step_id: null,
     message_override: "Frozen message",
     scheduled_for: "2026-01-01T09:00:00.000Z",
     status: "processing",
