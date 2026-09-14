@@ -631,7 +631,17 @@ Worth preserving as a judgment, not a defect: a booking four months after a sing
 
 ## Session 20 — Follow-ups V2: Stable Ids, Activation, Queue, Lifetime Analytics
 
-Branch `followups-v2`. Code complete, 160 tests + typecheck + build green. **Nothing is applied or deployed yet** — the rollout below is not the usual order and the sequence matters.
+Branch `followups-v2`, off `typography-scale`. Code complete, 160 tests + typecheck + build green. **Nothing is applied or deployed yet** — the rollout below is not the usual order and the sequence matters.
+
+| Commit | What it does | Rollout role |
+|---|---|---|
+| `50711f2` | Step ids in types/resolver; settings route mints them and refuses an id-less save | **Deploy A** |
+| `27d6632` | Writes `step_id`/`step_day` at every log insert; selection still positional | Deploy B |
+| `c71b6f2` | Selection by id/day, activation, overdue-first queue, step ids on the wire | Deploy B |
+| `9475647` | Lifetime analytics, per-follow-up table, settings relabel + Aktiv toggle | Deploy B |
+| `41a9340`, `18ecca0` | This documentation; removal of an unused field | Deploy B |
+
+Each commit leaves typecheck and tests green on its own, so Deploy B can be cut at any of them if it needs splitting further.
 
 ### Why
 
@@ -662,8 +672,17 @@ Not the usual "apply then deploy". Both halves of the ordering are load-bearing:
 
 ### Verification
 
-- `npm run typecheck`, `npm test` (160 across 14 files), `npm run build` — all pass.
+- `npm run typecheck`, `npm test` (160 across 14 files), `npm run build`, `git diff --check` — all pass.
+- The suite was run five consecutive times to confirm the new queue and crediting tests are deterministic rather than order-dependent.
 - **Not run:** no migration has touched a database, no browser check of `/app/settings` or `/app/analytics`, no cron dry-run. The SQL is reviewed only, as with every migration in this project (no local Postgres).
+
+### Behaviour changes to expect on the patient list
+
+Worth anticipating rather than treating as a regression when Deploy B lands:
+
+- **Cohort counts shift.** The Waiting/Sent split changed: `Sent` now requires that something actually went out in the cycle. A patient whose applicable steps are all inactive moves from `Sent` to `Waiting`. `daily_snapshots` rows before and after the deploy are therefore not directly comparable.
+- **A manual send that used to "re-send the last step" now returns null.** That branch only ever produced a bogus "Redan reserverad av parallell förfrågan" skip, because the reservation hit the unique index. It is gone rather than preserved.
+- **The template dropdowns list days, not positions** — "90 dagar" instead of "Mall 3 (dag 90)", with "(inaktiv)" where it applies.
 
 ### Open after this session
 
