@@ -102,7 +102,7 @@ export default async function LoginPage({
         }
 
         .login-desc {
-          font-size: 14.5px;
+          font-size: 16px;
           font-weight: 300;
           color: rgba(255,255,255,0.62);
           line-height: 1.75;
@@ -112,7 +112,7 @@ export default async function LoginPage({
         .login-left-footer {
           position: relative;
           z-index: 1;
-          font-size: 11.5px;
+          font-size: 14px;
           color: rgba(255,255,255,0.28);
           letter-spacing: 0.08em;
           text-transform: uppercase;
@@ -148,7 +148,7 @@ export default async function LoginPage({
         }
 
         .login-form-eyebrow {
-          font-size: 11px;
+          font-size: 14px;
           font-weight: 500;
           letter-spacing: 0.16em;
           text-transform: uppercase;
@@ -167,7 +167,7 @@ export default async function LoginPage({
         }
 
         .login-form-sub {
-          font-size: 14px;
+          font-size: 16px;
           color: #8aaa9e;
           margin-bottom: 40px;
           font-weight: 300;

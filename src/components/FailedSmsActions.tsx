@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useToast } from "./ToastProvider";
+import { defaultMessage, isRealSend, type SendOutcome } from "@/lib/sms/outcome";
 
 type Props = {
   reviewId: string;
@@ -14,12 +17,14 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
   const [message, setMessage] = useState(initialMessage);
   const [busy, setBusy] = useState<"send" | "resolve" | "ignore" | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const toast = useToast();
+  const router = useRouter();
 
   async function send() {
     setBusy("send");
     setResult(null);
     let res: Response;
-    let data: { status?: string; error?: string } = {};
+    let data: { outcome?: SendOutcome; status?: string; error?: string } = {};
     try {
       res = await fetch("/api/reminders/send-message", {
         method: "POST",
@@ -36,18 +41,31 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
     } catch (err) {
       console.error("[FailedSmsActions] network error", err);
       setBusy(null);
-      setResult({ ok: false, text: "Nätverksfel — kontrollera anslutningen" });
+      // The request may have reached the server, so this cannot be reported as
+      // a clean failure either.
+      const text = "Nätverksfel — kunde inte bekräfta om SMS:et skickades";
+      setResult({ ok: false, text });
+      toast.push({
+        tone: "error",
+        title: text,
+        detail: "Kontrollera SMS-historiken innan du skickar igen.",
+      });
       return;
     }
     setBusy(null);
-    if (res.ok) {
-      console.log("[FailedSmsActions] send ok", { status: data.status, reviewId, sequenceNumber });
-      setResult({ ok: true, text: data.status === "dry_run" ? "Loggad (testläge)" : "Skickat!" });
-      setTimeout(() => window.location.reload(), 900);
-    } else {
-      console.error("[FailedSmsActions] send failed", { httpStatus: res.status, error: data.error, reviewId, patientId, sequenceNumber });
-      setResult({ ok: false, text: `[${res.status}] ${data.error ?? "Misslyckades"}` });
-    }
+
+    // Use the server's outcome rather than re-deriving one from status codes:
+    // that hand-mapping is what previously let unknown and skipped read as
+    // success. Validation errors carry no outcome, so fall back conservatively.
+    const outcome: SendOutcome = data.outcome ?? {
+      kind: res.ok ? "unknown" : "failed",
+      message: data.error ?? defaultMessage(res.ok ? "unknown" : "failed"),
+      detail: res.ok ? null : `HTTP ${res.status}`,
+    };
+
+    toast.outcome(outcome);
+    setResult({ ok: isRealSend(outcome.kind), text: outcome.message });
+    if (isRealSend(outcome.kind) || outcome.kind === "dry_run") router.refresh();
   }
 
   async function resolve(status: "resolved" | "ignored") {
@@ -79,7 +97,7 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
         onChange={(e) => setMessage(e.target.value)}
         rows={4}
         style={{
-          fontSize: 12.5,
+          fontSize: 14,
           lineHeight: 1.5,
           padding: "8px 10px",
           border: "1px solid var(--border)",
@@ -95,7 +113,7 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
         <button
           onClick={send}
           disabled={busy !== null || !message.trim()}
-          style={{ fontSize: 12, padding: "5px 12px", minHeight: "unset" }}
+          style={{ fontSize: 14, padding: "5px 12px", minHeight: "unset" }}
         >
           {busy === "send" ? "Skickar…" : "Skicka nu"}
         </button>
@@ -103,7 +121,7 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
           className="secondary"
           onClick={() => resolve("resolved")}
           disabled={busy !== null}
-          style={{ fontSize: 12, padding: "5px 12px", minHeight: "unset" }}
+          style={{ fontSize: 14, padding: "5px 12px", minHeight: "unset" }}
         >
           {busy === "resolve" ? "…" : "Markera löst"}
         </button>
@@ -111,12 +129,12 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
           className="danger"
           onClick={() => resolve("ignored")}
           disabled={busy !== null}
-          style={{ fontSize: 12, padding: "5px 12px", minHeight: "unset" }}
+          style={{ fontSize: 14, padding: "5px 12px", minHeight: "unset" }}
         >
           {busy === "ignore" ? "…" : "Ignorera"}
         </button>
         {result && (
-          <span style={{ fontSize: 12, fontWeight: 500, color: result.ok ? "var(--accent)" : "var(--red)" }}>
+          <span style={{ fontSize: 14, fontWeight: 500, color: result.ok ? "var(--accent)" : "var(--red)" }}>
             {result.text}
           </span>
         )}

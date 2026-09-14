@@ -470,6 +470,44 @@ Real concurrent-worker races and cancellation races still require a live Postgre
 
 ---
 
+## Typography and Type Scale
+
+### Body font: Inter → Source Sans 3
+
+Inter is a neutral grotesque — uniform strokes, closed apertures, engineered to disappear. It read as impersonal in a product whose whole job is a clinic talking to its patients. Source Sans 3 is humanist: open apertures and slight stroke modulation give it some warmth while still holding up in dense tables, and it pairs with the Merriweather headings the way a grotesque does not. Loaded from Google Fonts in `app/layout.tsx`; `--font-body` in `globals.css` is the only consumer.
+
+Weight **700 is now loaded**. It is used on body text in roughly twenty components but only 400/500/600 were ever requested, so every bold was browser-synthesised (faux bold) — smeared, with letterforms the designer never drew.
+
+### The scale
+
+Six steps, defined as tokens at the top of `globals.css`. Before this pass the app used **18 distinct font sizes** between 10.5 and 38px, most of them arbitrary neighbours (13 and 13.5 and 14 all in play), which is what made the UI read as inconsistent rather than merely small.
+
+| Token | Size | Role |
+|---|---|---|
+| `--fs-xs` | 12px | Field hints, kbd shortcuts, incidental chrome |
+| `--fs-sm` | 14px | Uppercase eyebrows and column headers, secondary/muted text, badges, buttons, nav |
+| `--fs-body` | 16px | Default body, table cells, primary row labels |
+| `--fs-lg` | 19px | Section and panel titles |
+| `--fs-title` | 28px | Page title |
+| `--fs-display` | 40px | Metric values |
+
+**The rule: no in-between sizes.** Anything that needs to be "a bit smaller" goes to the next step down, not to a new value. That discipline is the whole point — the 18-size sprawl came from repeatedly nudging one element by half a pixel.
+
+Two deliberate choices worth not re-litigating:
+
+- **Nav sits at `sm` (14), not `body`.** Nav is chrome, not content; at body size it competes with the page for attention, and at 16+ "Schemalagda SMS" wraps to two lines in the 216px sidebar.
+- **Uppercase eyebrows sit at `sm` (14), not `xs`.** They are structure — panel and column headers — and at 12 they read as noise. This is why `--fs-xs` is now a narrow tier used for genuinely incidental text only.
+
+### Gotcha for any future type change
+
+**Font sizes are not centralised.** Roughly 190 of them live in inline `style={{ fontSize: n }}` objects across `src/components/*.tsx` **and** `app/**/*.tsx`; `globals.css` holds only about 25. The page files under `app/` are easy to miss — `app/app/dashboard/page.tsx` in particular owns `S.sectionLabel`, the uppercase eyebrow shared by every dashboard panel including Senaste aktivitet. A sweep that covers `src/components` but not `app/` produces exactly the symptom it looks like it fixed: half the dashboard scaled, half not, with adjacent panels visibly disagreeing.
+
+The `--fs-*` tokens exist so this converges over time; components are still on raw px and can be migrated opportunistically.
+
+`app/login/page.tsx` is intentionally **outside** the scale — its Cormorant Garamond hero type (56/48px) is a separate treatment for the unauthenticated shell.
+
+---
+
 ## What Still Needs to Be Done
 
 ### Blocking / highest value

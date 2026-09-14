@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import type { TemplateStep } from "./PatientActions";
+import { useToast } from "./ToastProvider";
 
 interface Props {
   patientId: string;
@@ -24,6 +25,7 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const firstRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
 
   useEffect(() => {
     setTimeout(() => firstRef.current?.focus(), 60);
@@ -63,8 +65,30 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json().catch(() => ({})) as { error?: string };
-      if (!res.ok) { setError(data.error ?? "Något gick fel"); setBusy(false); return; }
+      const data = await res.json().catch(() => ({})) as { error?: string; scheduled_for?: string };
+      if (!res.ok) {
+        // 409 is a rejected step (already sent, or out of order) rather than a
+        // malformed request — keep it inline where the operator is looking, and
+        // mirror it to a toast so it is not missed if the dialog closes.
+        const message = data.error ?? "Något gick fel";
+        setError(message);
+        toast.push({
+          tone: res.status === 409 ? "warning" : "error",
+          title: "Kunde inte schemalägga SMS",
+          detail: message,
+        });
+        setBusy(false);
+        return;
+      }
+      toast.push({
+        tone: "success",
+        title: "SMS schemalagt",
+        detail: new Intl.DateTimeFormat("sv-SE", {
+          dateStyle: "medium",
+          timeStyle: "short",
+          timeZone: CLINIC_TIME_ZONE,
+        }).format(selectedDate),
+      });
       onScheduled();
     } catch {
       setError("Nätverksfel");
@@ -106,7 +130,7 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
           alignItems: "center",
           justifyContent: "space-between",
         }}>
-          <span id="schedule-sms-title" style={{ fontWeight: 700, fontSize: 15, color: "#fff", letterSpacing: "-0.01em" }}>
+          <span id="schedule-sms-title" style={{ fontWeight: 700, fontSize: 19, color: "#fff", letterSpacing: "-0.01em" }}>
             Schemalägg SMS
           </span>
           <button
@@ -117,7 +141,7 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
               border: "1px solid rgba(255,255,255,0.18)",
               borderRadius: 6,
               color: "rgba(255,255,255,0.8)",
-              fontSize: 16,
+              fontSize: 19,
               lineHeight: 1,
               padding: "3px 8px",
               cursor: "pointer",
@@ -130,7 +154,7 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
         <form onSubmit={handleSubmit} style={{ padding: "24px" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
                 Datum och tid (Europe/Stockholm)<span style={{ color: "var(--red)", marginLeft: 2 }}>*</span>
               </span>
               <input
@@ -145,7 +169,7 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
                   borderRadius: "var(--radius-sm)",
                   background: "var(--surface-sub)",
                   color: "var(--text)",
-                  fontSize: 13,
+                  fontSize: 14,
                   padding: "8px 11px",
                   outline: "none",
                   width: "100%",
@@ -156,7 +180,7 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
 
             {steps.length > 0 && (
               <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
                   Mall
                 </span>
                 <select
@@ -167,7 +191,7 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
                     borderRadius: "var(--radius-sm)",
                     background: "var(--surface-sub)",
                     color: "var(--text)",
-                    fontSize: 13,
+                    fontSize: 14,
                     padding: "8px 11px",
                     outline: "none",
                     width: "100%",
@@ -186,7 +210,7 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
           </div>
 
           {error && (
-            <p style={{ marginTop: 12, fontSize: 12.5, color: "var(--red)" }}>{error}</p>
+            <p style={{ marginTop: 12, fontSize: 14, color: "var(--red)" }}>{error}</p>
           )}
 
           <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>

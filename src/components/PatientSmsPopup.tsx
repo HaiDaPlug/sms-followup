@@ -63,7 +63,7 @@ export function PatientSmsPopup({ patientName, logs: initialLogs }: Props) {
           {patientName}
         </div>
         {sentCount > 0 && (
-          <div style={{ fontSize: 11, color: "var(--accent)", marginTop: 1, fontWeight: 600 }}>
+          <div style={{ fontSize: 12, color: "var(--accent)", marginTop: 1, fontWeight: 600 }}>
             {sentCount} SMS skicka{sentCount !== 1 ? "de" : "t"}
           </div>
         )}
@@ -81,24 +81,24 @@ export function PatientSmsPopup({ patientName, logs: initialLogs }: Props) {
             {/* Header */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
               <div>
-                <div style={{ fontFamily: "var(--font-head)", fontSize: 15, fontWeight: 700, color: "var(--text)" }}>
+                <div style={{ fontFamily: "var(--font-head)", fontSize: 19, fontWeight: 700, color: "var(--text)" }}>
                   {patientName}
                 </div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                <div style={{ fontSize: 14, color: "var(--text-muted)", marginTop: 2 }}>
                   {sentCount} skicka{sentCount !== 1 ? "de" : "t"} · {logs.length} loggpost{logs.length !== 1 ? "er" : ""}
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "var(--text-muted)", padding: "0 4px", lineHeight: 1 }}
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 19, color: "var(--text-muted)", padding: "0 4px", lineHeight: 1 }}
               >
                 ×
               </button>
             </div>
 
             {logs.length === 0 ? (
-              <div style={{ fontSize: 13, color: "var(--text-faint)", textAlign: "center", padding: "20px 0" }}>
+              <div style={{ fontSize: 14, color: "var(--text-faint)", textAlign: "center", padding: "20px 0" }}>
                 Inga SMS-poster för den här patienten.
               </div>
             ) : (
@@ -109,12 +109,12 @@ export function PatientSmsPopup({ patientName, logs: initialLogs }: Props) {
                     style={{ background: "var(--surface-sub)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 4 }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span className={`badge ${badgeClass(log.status)}`} style={{ fontSize: 11 }}>
+                      <span className={`badge ${badgeClass(log.status)}`} style={{ fontSize: 12 }}>
                         {log.sequence_number
                           ? `SMS ${log.sequence_number} — ${statusSv[log.status] ?? log.status}`
                           : (statusSv[log.status] ?? log.status)}
                       </span>
-                      <span style={{ fontSize: 11, color: "var(--text-faint)", marginLeft: "auto" }}>
+                      <span style={{ fontSize: 12, color: "var(--text-faint)", marginLeft: "auto" }}>
                         {formatTs(log.sent_at ?? log.created_at)}
                       </span>
                       <button
@@ -122,18 +122,18 @@ export function PatientSmsPopup({ patientName, logs: initialLogs }: Props) {
                         title="Ta bort loggpost"
                         disabled={deleting === log.id}
                         onClick={() => deleteLog(log.id)}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: 15, padding: "0 2px", lineHeight: 1, opacity: deleting === log.id ? 0.4 : 1, flexShrink: 0 }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: 19, padding: "0 2px", lineHeight: 1, opacity: deleting === log.id ? 0.4 : 1, flexShrink: 0 }}
                       >
                         ×
                       </button>
                     </div>
                     {log.message && (
-                      <div style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>
+                      <div style={{ fontSize: 14, color: "var(--text-muted)", lineHeight: 1.5 }}>
                         {log.message}
                       </div>
                     )}
                     {log.error && (
-                      <div style={{ fontSize: 11.5, color: "var(--red)" }}>
+                      <div style={{ fontSize: 14, color: "var(--red)" }}>
                         {log.error}
                       </div>
                     )}

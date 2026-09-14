@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { useToast } from "./ToastProvider";
+import { isRealSend } from "@/lib/sms/outcome";
+import { requestSend } from "@/lib/sms/sendClient";
 
 type ReadyPatient = {
   id: string;
@@ -59,7 +62,7 @@ const globalStyles = `
   border: none;
   border-radius: 5px;
   padding: 6px 13px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
@@ -140,23 +143,26 @@ function SkeletonRows({ count = 6 }: { count?: number }) {
 function SendButton({ patientId, onSent }: { patientId: string; onSent: () => void }) {
   const [state, setState] = useState<SendState>("idle");
   const reduced = useReducedMotion();
+  const toast = useToast();
 
   async function handleSend(e: React.MouseEvent) {
     e.stopPropagation();
     if (state !== "idle") return;
     setState("sending");
-    try {
-      const res = await fetch("/api/reminders/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId, forceNext: true }),
-      });
-      const data = await res.json();
-      const success = data.status === "sent" || data.status === "dry_run";
-      setState(success ? "sent" : "failed");
-      if (success) setTimeout(() => onSent(), 700);
-      else setTimeout(() => setState("idle"), 3000);
-    } catch {
+
+    const outcome = await requestSend({ patientId });
+    toast.outcome(outcome);
+
+    // Only a real send shows the "Skickat ✓" confirmation; a dry run or a
+    // refused send falls back to idle so the label never overstates what
+    // happened. The toast carries the actual outcome.
+    if (isRealSend(outcome.kind)) {
+      setState("sent");
+      setTimeout(() => onSent(), 700);
+    } else if (outcome.kind === "dry_run") {
+      setState("idle");
+      onSent();
+    } else {
       setState("failed");
       setTimeout(() => setState("idle"), 3000);
     }
@@ -295,7 +301,7 @@ function Modal({ type, onClose, onSmsSent }: {
 
     if (type === "ready") {
       if (readyPatients.length === 0)
-        return <p style={{ padding: "24px", fontSize: 13, color: "var(--text-muted)" }}>Inga patienter redo just nu.</p>;
+        return <p style={{ padding: "24px", fontSize: 14, color: "var(--text-muted)" }}>Inga patienter redo just nu.</p>;
       return (
         <motion.div variants={listVariants} initial="hidden" animate="show">
           <AnimatePresence initial={false}>
@@ -308,20 +314,20 @@ function Modal({ type, onClose, onSmsSent }: {
                 style={rowStyle(i)}
               >
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <p style={{ fontWeight: 600, fontSize: 14, color: "var(--text)", marginBottom: 3 }}>{p.full_name}</p>
-                  <p style={{ fontSize: 12, color: "var(--text-muted)", letterSpacing: "0.01em" }}>
+                  <p style={{ fontWeight: 600, fontSize: 16, color: "var(--text)", marginBottom: 3 }}>{p.full_name}</p>
+                  <p style={{ fontSize: 14, color: "var(--text-muted)", letterSpacing: "0.01em" }}>
                     {p.phone ?? "Saknar nummer"}
                     {p.latest_treatment ? <span style={{ color: "var(--text-faint)", margin: "0 5px" }}>·</span> : null}
                     {p.latest_treatment}
                   </p>
                   {(p.smsCount ?? 0) > 0 && (
-                    <p style={{ fontSize: 11, fontWeight: 600, color: "#2a7a68", marginTop: 3, letterSpacing: "0.01em" }}>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: "#2a7a68", marginTop: 3, letterSpacing: "0.01em" }}>
                       {p.smsCount} SMS skicka{(p.smsCount ?? 0) !== 1 ? "de" : "t"}
                     </p>
                   )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }}>
-                  <span style={{ fontSize: 12, color: "var(--text-faint)", fontVariantNumeric: "tabular-nums" }}>
+                  <span style={{ fontSize: 14, color: "var(--text-faint)", fontVariantNumeric: "tabular-nums" }}>
                     {formatDate(p.last_booking_at)}
                   </span>
                   <SendButton patientId={p.id} onSent={() => handlePatientSent(p.id)} />
@@ -335,21 +341,21 @@ function Modal({ type, onClose, onSmsSent }: {
 
     if (type === "sms") {
       if (smsLogs.length === 0)
-        return <p style={{ padding: "24px", fontSize: 13, color: "var(--text-muted)" }}>Inga SMS skickade denna månad.</p>;
+        return <p style={{ padding: "24px", fontSize: 14, color: "var(--text-muted)" }}>Inga SMS skickade denna månad.</p>;
       return (
         <motion.div variants={listVariants} initial="hidden" animate="show">
           {smsLogs.map((l, i) => (
             <motion.div key={l.id} variants={rowVariants} style={rowStyle(i)}>
               <div>
-                <p style={{ fontWeight: 600, fontSize: 14, color: "var(--text)", marginBottom: 3 }}>
+                <p style={{ fontWeight: 600, fontSize: 16, color: "var(--text)", marginBottom: 3 }}>
                   {l.full_name ?? l.phone ?? "—"}
                 </p>
-                <p style={{ fontSize: 12, color: "var(--text-muted)" }}>{l.full_name ? (l.phone ?? "") : ""}</p>
+                <p style={{ fontSize: 14, color: "var(--text-muted)" }}>{l.full_name ? (l.phone ?? "") : ""}</p>
               </div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexShrink: 0 }}>
                 {l.sequence_number && (
                   <span style={{
-                    fontSize: 10.5, fontWeight: 700, color: "var(--text-muted)",
+                    fontSize: 14, fontWeight: 700, color: "var(--text-muted)",
                     letterSpacing: "0.06em", textTransform: "uppercase",
                     background: "var(--surface-sub)", border: "1px solid var(--border)",
                     borderRadius: 4, padding: "2px 6px",
@@ -357,7 +363,7 @@ function Modal({ type, onClose, onSmsSent }: {
                     SMS {l.sequence_number}
                   </span>
                 )}
-                <span style={{ fontSize: 12, color: "var(--text-faint)", fontVariantNumeric: "tabular-nums" }}>
+                <span style={{ fontSize: 14, color: "var(--text-faint)", fontVariantNumeric: "tabular-nums" }}>
                   {formatDate(l.sent_at)}
                 </span>
               </div>
@@ -368,17 +374,17 @@ function Modal({ type, onClose, onSmsSent }: {
     }
 
     if (reviewItems.length === 0)
-      return <p style={{ padding: "24px", fontSize: 13, color: "var(--text-muted)" }}>Inga ärenden inväntar granskning.</p>;
+      return <p style={{ padding: "24px", fontSize: 14, color: "var(--text-muted)" }}>Inga ärenden inväntar granskning.</p>;
     return (
       <motion.div variants={listVariants} initial="hidden" animate="show">
         {reviewItems.map((item, i) => (
           <motion.div key={item.id} variants={rowVariants} style={{ ...rowStyle(i), alignItems: "flex-start" }}>
             <div style={{ flex: 1 }}>
-              <p style={{ fontWeight: 600, fontSize: 14, color: "var(--text)", marginBottom: 4 }}>{item.title}</p>
-              <p style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>{item.description}</p>
+              <p style={{ fontWeight: 600, fontSize: 16, color: "var(--text)", marginBottom: 4 }}>{item.title}</p>
+              <p style={{ fontSize: 14, color: "var(--text-muted)", lineHeight: 1.5 }}>{item.description}</p>
             </div>
             <span style={{
-              fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase",
+              fontSize: 12, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase",
               color: severityColor[item.severity], background: severityBg[item.severity],
               border: `1px solid ${severityBorder[item.severity]}`,
               borderRadius: "var(--radius-sm)", padding: "3px 8px", flexShrink: 0, marginTop: 2,
@@ -440,7 +446,7 @@ function Modal({ type, onClose, onSmsSent }: {
             <span style={{
               fontFamily: "var(--font-head)",
               fontWeight: 700,
-              fontSize: 15,
+              fontSize: 19,
               color: HEADER.color,
               letterSpacing: "-0.01em",
               flexShrink: 0,
@@ -466,7 +472,7 @@ function Modal({ type, onClose, onSmsSent }: {
                         borderRadius: 4,
                         color: sort === opt ? "#fff" : "rgba(255,255,255,0.55)",
                         cursor: "pointer",
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: 600,
                         letterSpacing: "0.04em",
                         padding: "3px 9px",
@@ -489,7 +495,7 @@ function Modal({ type, onClose, onSmsSent }: {
                   border: "1px solid rgba(255,255,255,0.18)",
                   borderRadius: 6,
                   cursor: "pointer",
-                  fontSize: 16,
+                  fontSize: 19,
                   color: "rgba(255,255,255,0.8)",
                   lineHeight: 1,
                   padding: "3px 8px",
@@ -520,7 +526,7 @@ function Modal({ type, onClose, onSmsSent }: {
                   gap: 12,
                 }}
               >
-                <span style={{ fontSize: 12, color: "var(--text-faint)", fontVariantNumeric: "tabular-nums" }}>
+                <span style={{ fontSize: 14, color: "var(--text-faint)", fontVariantNumeric: "tabular-nums" }}>
                   {footerText}
                 </span>
                 {type === "ready" && readyTotalPages > 1 && (
@@ -533,13 +539,13 @@ function Modal({ type, onClose, onSmsSent }: {
                         border: "1px solid var(--border)",
                         borderRadius: 5,
                         cursor: readyPage === 1 ? "default" : "pointer",
-                        fontSize: 13,
+                        fontSize: 14,
                         color: readyPage === 1 ? "var(--text-faint)" : "var(--text)",
                         padding: "3px 10px",
                         opacity: readyPage === 1 ? 0.4 : 1,
                       }}
                     >←</button>
-                    <span style={{ fontSize: 12, color: "var(--text-muted)", padding: "0 4px", minWidth: 60, textAlign: "center" }}>
+                    <span style={{ fontSize: 14, color: "var(--text-muted)", padding: "0 4px", minWidth: 60, textAlign: "center" }}>
                       {readyPage} / {readyTotalPages}
                     </span>
                     <button
@@ -550,7 +556,7 @@ function Modal({ type, onClose, onSmsSent }: {
                         border: "1px solid var(--border)",
                         borderRadius: 5,
                         cursor: readyPage === readyTotalPages ? "default" : "pointer",
-                        fontSize: 13,
+                        fontSize: 14,
                         color: readyPage === readyTotalPages ? "var(--text-faint)" : "var(--text)",
                         padding: "3px 10px",
                         opacity: readyPage === readyTotalPages ? 0.4 : 1,
@@ -621,7 +627,7 @@ export function KpiStrip({ items: initialItems }: { items: KpiItem[] }) {
           >
             <p className="metric" style={{ display: "flex", alignItems: "center", gap: 5 }}>
               {label}
-              {clickable && <span style={{ fontSize: 10, color: "var(--text-faint)" }}>↗</span>}
+              {clickable && <span style={{ fontSize: 12, color: "var(--text-faint)" }}>↗</span>}
             </p>
             <motion.p
               key={value}

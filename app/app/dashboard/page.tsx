@@ -29,7 +29,7 @@ const S = {
     background: "var(--surface-sub)",
   } as React.CSSProperties,
   sectionLabel: {
-    fontSize: 10.5,
+    fontSize: 14,
     fontWeight: 600,
     letterSpacing: "0.07em",
     textTransform: "uppercase" as const,
@@ -84,10 +84,10 @@ export default async function DashboardPage() {
               padding: "13px 18px",
             }}>
               <div>
-                <span style={{ fontWeight: 600, fontSize: 14, color: "var(--red)", marginRight: 10 }}>
+                <span style={{ fontWeight: 600, fontSize: 16, color: "var(--red)", marginRight: 10 }}>
                   {nudge.title}
                 </span>
-                <span style={{ fontSize: 13, color: "var(--red)", opacity: 0.75 }}>{nudge.description}</span>
+                <span style={{ fontSize: 14, color: "var(--red)", opacity: 0.75 }}>{nudge.description}</span>
               </div>
               <span style={{
                 ...S.sectionLabel,
@@ -120,12 +120,12 @@ export default async function DashboardPage() {
                 borderBottom: "1px solid var(--border)",
               }}>
                 <div>
-                  <span style={{ fontWeight: 500, fontSize: 13.5, color: "var(--text)" }}>{meta.label}</span>
-                  <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 6 }}>{meta.sub}</span>
+                  <span style={{ fontWeight: 500, fontSize: 16, color: "var(--text)" }}>{meta.label}</span>
+                  <span style={{ fontSize: 14, color: "var(--text-muted)", marginLeft: 6 }}>{meta.sub}</span>
                 </div>
                 <span style={{
                   fontFamily: "var(--font-head)",
-                  fontSize: 20,
+                  fontSize: 19,
                   fontWeight: 900,
                   letterSpacing: "-0.02em",
                   color: value === 0 ? "var(--text-faint)" : "var(--text)",
@@ -144,7 +144,7 @@ export default async function DashboardPage() {
               <span style={S.sectionLabel}>Varningar</span>
             </div>
             {otherNudges.length === 0 ? (
-              <p style={{ padding: "16px 20px", fontSize: 13, color: "var(--text-muted)" }}>
+              <p style={{ padding: "16px 20px", fontSize: 14, color: "var(--text-muted)" }}>
                 Inga aktiva varningar.
               </p>
             ) : (
@@ -158,8 +158,8 @@ export default async function DashboardPage() {
                   borderBottom: "1px solid var(--border)",
                 }}>
                   <div>
-                    <p style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 2 }}>{nudge.title}</p>
-                    <p style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.4 }}>{nudge.description}</p>
+                    <p style={{ fontWeight: 600, fontSize: 16, marginBottom: 2 }}>{nudge.title}</p>
+                    <p style={{ fontSize: 14, color: "var(--text-muted)", lineHeight: 1.4 }}>{nudge.description}</p>
                   </div>
                   <span style={{
                     ...S.sectionLabel,

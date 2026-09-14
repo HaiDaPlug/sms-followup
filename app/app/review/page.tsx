@@ -86,7 +86,7 @@ export default async function ReviewPage() {
             {items.map((item) => (
               <tr key={item.id}>
                 <td>
-                  <span className="muted" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.4px", fontWeight: 700 }}>
+                  <span className="muted" style={{ fontSize: 14, textTransform: "uppercase", letterSpacing: "0.4px", fontWeight: 700 }}>
                     {item.type}
                   </span>
                 </td>

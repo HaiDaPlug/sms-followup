@@ -104,7 +104,7 @@ export default async function PatientsPage({
           border-radius: var(--radius-sm);
           background: var(--surface);
           color: var(--text);
-          font-size: 13.5px;
+          font-size: 16px;
           width: 220px;
           outline: none;
           transition: border-color 180ms, box-shadow 180ms, width 220ms cubic-bezier(0.22,1,0.36,1);
@@ -136,7 +136,7 @@ export default async function PatientsPage({
         }
         .pt-sort-seg a {
           padding: 8px 15px;
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 500;
           color: var(--text-muted);
           white-space: nowrap;
@@ -162,7 +162,7 @@ export default async function PatientsPage({
           border-radius: var(--radius-sm);
           background: var(--surface);
           color: var(--text-muted);
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 500;
           padding: 6px 15px;
           transition: all 140ms ease;
@@ -203,7 +203,7 @@ export default async function PatientsPage({
           gap: 14px;
         }
         .pt-count-chip {
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 600;
           color: var(--text-muted);
           background: var(--surface-sub);
@@ -263,13 +263,13 @@ export default async function PatientsPage({
       {totalPages > 1 && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6, marginBottom: 8 }}>
           {currentPage > 1 && (
-            <Link href={buildHref(currentParams, { page: String(currentPage - 1) })} style={{ padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 5, fontSize: 13, color: "var(--text-muted)", background: "var(--surface)" }}>←</Link>
+            <Link href={buildHref(currentParams, { page: String(currentPage - 1) })} style={{ padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 5, fontSize: 14, color: "var(--text-muted)", background: "var(--surface)" }}>←</Link>
           )}
-          <span style={{ fontSize: 12, color: "var(--text-faint)", padding: "0 4px" }}>
+          <span style={{ fontSize: 14, color: "var(--text-faint)", padding: "0 4px" }}>
             Sida {currentPage} / {totalPages}
           </span>
           {currentPage < totalPages && (
-            <Link href={buildHref(currentParams, { page: String(currentPage + 1) })} style={{ padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 5, fontSize: 13, color: "var(--text-muted)", background: "var(--surface)" }}>→</Link>
+            <Link href={buildHref(currentParams, { page: String(currentPage + 1) })} style={{ padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 5, fontSize: 14, color: "var(--text-muted)", background: "var(--surface)" }}>→</Link>
           )}
         </div>
       )}

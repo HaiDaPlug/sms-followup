@@ -135,25 +135,25 @@ export function AnalyticsChart({
       borderWidth: 1,
       padding: 10,
       extraCssText: "box-shadow: 0 8px 24px rgba(13,31,26,0.14); border-radius: 8px;",
-      textStyle: { color: "var(--text)", fontSize: 12.5 },
+      textStyle: { color: "var(--text)", fontSize: 14 },
       formatter: (params: unknown) => {
         const rows = params as Array<{ axisValueLabel: string; seriesName: string; value: number; color: string }>;
         if (!rows.length) return "";
         const body = rows.map((p) => `
           <div style="display:flex;align-items:center;justify-content:space-between;gap:20px;padding:2px 0;">
-            <span style="display:flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;">
+            <span style="display:flex;align-items:center;gap:6px;color:var(--text-muted);font-size: 14px;">
               <span style="display:inline-block;width:10px;height:2px;border-radius:1px;background:${p.color};"></span>
               ${p.seriesName}
             </span>
             <span style="font-weight:700;color:var(--text);font-variant-numeric:tabular-nums;">${p.value}</span>
           </div>`).join("");
-        return `<div style="font-weight:600;font-size:11px;color:var(--text-muted);margin-bottom:6px;letter-spacing:0.02em;">${rows[0].axisValueLabel}</div>${body}`;
+        return `<div style="font-weight:600;font-size: 12px;color:var(--text-muted);margin-bottom:6px;letter-spacing:0.02em;">${rows[0].axisValueLabel}</div>${body}`;
       },
     },
     legend: {
       data: ["Bokningar", "SMS skickade"],
       bottom: 0,
-      textStyle: { color: "var(--text-muted)", fontSize: 12 },
+      textStyle: { color: "var(--text-muted)", fontSize: 14 },
       icon: "circle",
       itemWidth: 8,
       itemHeight: 8,
@@ -166,14 +166,14 @@ export function AnalyticsChart({
       boundaryGap: false,
       axisLine: { lineStyle: { color: "var(--border)" } },
       axisTick: { show: false },
-      axisLabel: { color: "var(--text-muted)", fontSize: 11 },
+      axisLabel: { color: "var(--text-muted)", fontSize: 12 },
     },
     yAxis: {
       type: "value",
       name: "Antal",
-      nameTextStyle: { color: "var(--text-muted)", fontSize: 11, align: "left" },
+      nameTextStyle: { color: "var(--text-muted)", fontSize: 12, align: "left" },
       axisLine: { show: false },
-      axisLabel: { color: "var(--text-muted)", fontSize: 11 },
+      axisLabel: { color: "var(--text-muted)", fontSize: 12 },
       splitLine: { lineStyle: { color: "var(--border)", type: "solid" } },
       minInterval: 1,
     },
@@ -257,7 +257,7 @@ export function AnalyticsChart({
               {conversionRate === null ? "—" : `${Math.round(conversionRate * 100)} %`}
             </p>
             {smsPatientCount > 0 && (
-              <p className="metric" style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+              <p className="metric" style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
                 av {smsPatientCount} kunder
               </p>
             )}
@@ -282,7 +282,7 @@ export function AnalyticsChart({
         <div>
           <h4 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             Bokningar under perioden
-            <span style={{ fontFamily: "var(--font-body)", fontWeight: 400, fontSize: 12, color: "var(--text-muted)" }}>
+            <span style={{ fontFamily: "var(--font-body)", fontWeight: 400, fontSize: 14, color: "var(--text-muted)" }}>
               ({activeBookingsCount} st)
             </span>
           </h4>
@@ -308,14 +308,14 @@ export function AnalyticsChart({
                     <td className="muted">{b.treatment ?? "—"}</td>
                     <td className="muted">{b.practitioner ?? "—"}</td>
                     <td>
-                      <span className="badge" style={{ fontSize: 10.5 }}>
+                      <span className="badge" style={{ fontSize: 12 }}>
                         {b.via_webhook ? "webhook" : "csv"}
                       </span>
                     </td>
                     <td>
                       {b.cancelled
-                        ? <span className="badge failed" style={{ fontSize: 10.5 }}>Avbokad</span>
-                        : <span className="badge sent" style={{ fontSize: 10.5 }}>Aktiv</span>
+                        ? <span className="badge failed" style={{ fontSize: 12 }}>Avbokad</span>
+                        : <span className="badge sent" style={{ fontSize: 12 }}>Aktiv</span>
                       }
                     </td>
                   </tr>
@@ -336,7 +336,7 @@ export function AnalyticsChart({
         <div>
           <h4 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
             SMS-matchade bokningar
-            <span style={{ fontFamily: "var(--font-body)", fontWeight: 400, fontSize: 12, color: "var(--text-muted)" }}>
+            <span style={{ fontFamily: "var(--font-body)", fontWeight: 400, fontSize: 14, color: "var(--text-muted)" }}>
               ({conversions.length} st)
             </span>
             {/* Scoped to this table and the conversion rate only — deliberately
@@ -360,7 +360,7 @@ export function AnalyticsChart({
             </span>
           </h4>
           {conversionsOutsideWindow > 0 && (
-            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>
+            <p style={{ fontSize: 14, color: "var(--text-muted)", margin: "0 0 8px" }}>
               {conversionsOutsideWindow} ytterligare ombokning{conversionsOutsideWindow === 1 ? "" : "ar"} skedde
               efter mer än {attributionDays} dagar och räknas inte här.
             </p>
@@ -383,11 +383,11 @@ export function AnalyticsChart({
                     <td className="muted" style={{ whiteSpace: "nowrap" }}>
                       {formatDate(c.reminder_log_sent_at)}
                       {c.sequence_number != null && (
-                        <span className="badge" style={{ fontSize: 10.5, marginLeft: 6 }}>steg {c.sequence_number}</span>
+                        <span className="badge" style={{ fontSize: 12, marginLeft: 6 }}>steg {c.sequence_number}</span>
                       )}
                     </td>
                     <td>
-                      <span className="badge sent" style={{ fontSize: 10.5 }}>{c.days_since_sms} dagar</span>
+                      <span className="badge sent" style={{ fontSize: 12 }}>{c.days_since_sms} dagar</span>
                     </td>
                   </tr>
                 ))}

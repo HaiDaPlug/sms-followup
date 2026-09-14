@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { ScheduleSmsDialog } from "./ScheduleSmsDialog";
+import { useToast } from "./ToastProvider";
+import { isRealSend } from "@/lib/sms/outcome";
+import { requestSend } from "@/lib/sms/sendClient";
 
 type SendState = "idle" | "sending" | "sent" | "failed";
 
@@ -19,7 +23,7 @@ const styles = `
   border-radius: 5px;
   padding: 0 14px;
   height: 32px;
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
@@ -63,7 +67,7 @@ const styles = `
   border-radius: 5px;
   padding: 0 12px;
   height: 32px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
@@ -88,7 +92,7 @@ const styles = `
   border-radius: 5px;
   padding: 0 12px;
   height: 32px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
@@ -112,7 +116,7 @@ const styles = `
   border-radius: 5px;
   padding: 0 10px;
   height: 32px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
@@ -140,7 +144,7 @@ const styles = `
   background-color: #073B2C;
   background-image: var(--btn-sheen);
   color: rgba(255,255,255,0.85);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
   padding: 0 8px;
   cursor: pointer;
@@ -162,7 +166,7 @@ const styles = `
   border-radius: 5px;
   padding: 0 12px;
   height: 32px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
@@ -202,6 +206,8 @@ export function PatientActions({
   const [isDnc, setIsDnc] = useState(doNotContact);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const toast = useToast();
+  const router = useRouter();
   const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
 
   if (typeof document !== "undefined") injectStyles();
@@ -210,30 +216,24 @@ export function PatientActions({
     if (sendState !== "idle") return;
     setSendState("sending");
     setSendError(null);
-    try {
-      const body: { patientId: string; sequenceOverride?: number; forceNext: boolean } = { patientId, forceNext: true };
-      if (selectedSeq !== null) body.sequenceOverride = selectedSeq;
-      const res = await fetch("/api/reminders/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json() as { status?: string; error?: string };
-      const ok = data.status === "sent" || data.status === "dry_run";
-      if (ok) {
-        console.log("[PatientActions] send ok", { patientId, status: data.status });
-        setSendState("sent");
-        setTimeout(() => window.location.reload(), 900);
-      } else {
-        const errText = `[${res.status}] ${data.error ?? data.status ?? "Okänt fel"}`;
-        console.error("[PatientActions] send failed", { patientId, httpStatus: res.status, status: data.status, error: data.error });
-        setSendError(errText);
-        setSendState("failed");
-        setTimeout(() => { setSendState("idle"); setSendError(null); }, 6000);
-      }
-    } catch (err) {
-      console.error("[PatientActions] network error", { patientId, err });
-      setSendError("Nätverksfel");
+
+    const outcome = await requestSend({
+      patientId,
+      sequenceOverride: selectedSeq ?? undefined,
+    });
+    toast.outcome(outcome);
+
+    // A dry run is deliberately NOT shown as "Skickat ✓": it produced no SMS,
+    // and the button previously claimed otherwise.
+    if (isRealSend(outcome.kind)) {
+      setSendState("sent");
+      router.refresh();
+      setTimeout(() => setSendState("idle"), 1200);
+    } else if (outcome.kind === "dry_run") {
+      setSendState("idle");
+      router.refresh();
+    } else {
+      setSendError(outcome.message);
       setSendState("failed");
       setTimeout(() => { setSendState("idle"); setSendError(null); }, 6000);
     }
@@ -311,7 +311,7 @@ export function PatientActions({
       </button>
 
       {sendError && (
-        <span style={{ fontSize: 11.5, color: "#a33030", fontWeight: 500, maxWidth: 260, whiteSpace: "normal", lineHeight: 1.3 }}>
+        <span style={{ fontSize: 14, color: "#a33030", fontWeight: 500, maxWidth: 260, whiteSpace: "normal", lineHeight: 1.3 }}>
           {sendError}
         </span>
       )}
@@ -324,7 +324,7 @@ export function PatientActions({
       </button>
 
       {scheduleMessage && (
-        <span style={{ fontSize: 11.5, color: "#2f8377", fontWeight: 600 }}>
+        <span style={{ fontSize: 14, color: "#2f8377", fontWeight: 600 }}>
           {scheduleMessage}
         </span>
       )}

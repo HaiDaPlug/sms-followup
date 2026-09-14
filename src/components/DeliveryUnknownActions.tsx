@@ -40,7 +40,7 @@ export function DeliveryUnknownActions({ reviewId, reminderLogId }: Props) {
         <button
           disabled={busy !== null || !reminderLogId}
           onClick={() => resolve("sent")}
-          style={{ fontSize: 12, padding: "5px 10px", minHeight: "unset" }}
+          style={{ fontSize: 14, padding: "5px 10px", minHeight: "unset" }}
         >
           {busy === "sent" ? "Sparar..." : "Markera skickad"}
         </button>
@@ -48,12 +48,12 @@ export function DeliveryUnknownActions({ reviewId, reminderLogId }: Props) {
           className="danger"
           disabled={busy !== null || !reminderLogId}
           onClick={() => resolve("failed")}
-          style={{ fontSize: 12, padding: "5px 10px", minHeight: "unset" }}
+          style={{ fontSize: 14, padding: "5px 10px", minHeight: "unset" }}
         >
           {busy === "failed" ? "Sparar..." : "Markera misslyckad"}
         </button>
       </div>
-      {error ? <span style={{ fontSize: 12, color: "var(--red)" }}>{error}</span> : null}
+      {error ? <span style={{ fontSize: 14, color: "var(--red)" }}>{error}</span> : null}
     </div>
   );
 }

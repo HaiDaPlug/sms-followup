@@ -48,15 +48,15 @@ function ReplyBox({ row, onReplied }: { row: InboxRow; onReplied: (msg: string) 
         onChange={(e) => setText(e.target.value)}
         placeholder="Skriv svar…"
         rows={2}
-        style={{ resize: "vertical", fontSize: 13 }}
+        style={{ resize: "vertical", fontSize: 14 }}
         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }}
       />
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <button onClick={send} disabled={busy || !text.trim()} style={{ fontSize: 12.5 }}>
+        <button onClick={send} disabled={busy || !text.trim()} style={{ fontSize: 14 }}>
           {busy ? "Skickar…" : "Skicka svar"}
         </button>
-        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Ctrl+Enter</span>
-        {error && <span style={{ fontSize: 12, color: "var(--red)" }}>{error}</span>}
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Ctrl+Enter</span>
+        {error && <span style={{ fontSize: 14, color: "var(--red)" }}>{error}</span>}
       </div>
     </div>
   );
@@ -83,32 +83,32 @@ function MessageCard({ row }: { row: InboxRow }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
             {row.patient_name ? (
-              <span style={{ fontWeight: 600, fontSize: 13.5, color: "var(--text)" }}>{row.patient_name}</span>
+              <span style={{ fontWeight: 600, fontSize: 16, color: "var(--text)" }}>{row.patient_name}</span>
             ) : (
-              <span style={{ fontWeight: 600, fontSize: 13.5, color: "var(--text-muted)" }}>Okänd avsändare</span>
+              <span style={{ fontWeight: 600, fontSize: 16, color: "var(--text-muted)" }}>Okänd avsändare</span>
             )}
-            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{row.from_number}</span>
+            <span style={{ fontSize: 14, color: "var(--text-muted)" }}>{row.from_number}</span>
             {unreplied && (
               <span style={{
-                fontSize: 10.5, fontWeight: 700, letterSpacing: "0.05em",
+                fontSize: 12, fontWeight: 700, letterSpacing: "0.05em",
                 background: "var(--accent)", color: "#fff",
                 borderRadius: 3, padding: "1px 6px",
               }}>NY</span>
             )}
           </div>
-          <div style={{ fontSize: 13.5, color: "var(--text)", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          <div style={{ fontSize: 16, color: "var(--text)", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
             {row.message}
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
-          <span style={{ fontSize: 11.5, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 14, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
             {formatTime(row.received_at)}
           </span>
           {!repliedAt && (
             <button
               className="secondary"
               onClick={() => setOpen((o) => !o)}
-              style={{ fontSize: 12, padding: "3px 10px", minHeight: "unset" }}
+              style={{ fontSize: 14, padding: "3px 10px", minHeight: "unset" }}
             >
               {open ? "Avbryt" : "Svara"}
             </button>
@@ -122,7 +122,7 @@ function MessageCard({ row }: { row: InboxRow }) {
           background: "var(--surface-sub)",
           borderRadius: "var(--radius-sm)",
           padding: "8px 12px",
-          fontSize: 12.5,
+          fontSize: 14,
           color: "var(--text-muted)",
           borderLeft: "3px solid var(--accent)",
         }}>
@@ -166,7 +166,7 @@ export function InboxClient({ initialRows }: { initialRows: InboxRow[] }) {
               border: "none",
               borderBottom: filter === f ? "2px solid var(--accent)" : "2px solid transparent",
               borderRadius: 0,
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: filter === f ? 600 : 400,
               color: filter === f ? "var(--accent)" : "var(--text-muted)",
               padding: "6px 14px",
@@ -187,7 +187,7 @@ export function InboxClient({ initialRows }: { initialRows: InboxRow[] }) {
           padding: "40px 24px",
           textAlign: "center",
           color: "var(--text-muted)",
-          fontSize: 13.5,
+          fontSize: 16,
         }}>
           {filter === "unreplied" ? "Inga obesvarade meddelanden." : "Inga inkommande meddelanden ännu."}
         </div>

@@ -3,6 +3,9 @@
 import { useState, useCallback } from "react";
 import { PatientSmsPopup } from "@/components/PatientSmsPopup";
 import { PatientActions, type TemplateStep } from "@/components/PatientActions";
+import { useToast } from "@/components/ToastProvider";
+import { isRealSend } from "@/lib/sms/outcome";
+import { requestSend } from "@/lib/sms/sendClient";
 import type { Patient, ReminderLog } from "@/types/clinic";
 
 export type PatientRow = {
@@ -68,6 +71,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
   const [bulkErrors, setBulkErrors] = useState<{ name: string; reason: string }[]>([]);
+  const toast = useToast();
 
   const allIds = rows.map((r) => r.patient.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
@@ -104,38 +108,43 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
     setProgress({ done: 0, total: ids.length });
 
     let sent = 0;
+    let skipped = 0;
+    let dryRun = 0;
     const failures: { name: string; reason: string }[] = [];
     for (const id of ids) {
       const patientName = rows.find((r) => r.patient.id === id)?.patient.full_name ?? id;
-      try {
-        const res = await fetch("/api/reminders/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ patientId: id, forceNext: true }),
-        });
-        const data = await res.json() as { status?: string; error?: string };
-        const ok = data.status === "sent" || data.status === "dry_run";
-        if (ok) {
-          sent++;
-          console.log("[PatientsClient] sent ok", { patientId: id, status: data.status });
-        } else {
-          const reason = data.error ?? data.status ?? `HTTP ${res.status}`;
-          failures.push({ name: patientName, reason });
-          console.error("[PatientsClient] send failed", { patientId: id, httpStatus: res.status, status: data.status, error: data.error });
-        }
-      } catch (err) {
-        failures.push({ name: patientName, reason: "Nätverksfel" });
-        console.error("[PatientsClient] network error", { patientId: id, err });
+      const outcome = await requestSend({ patientId: id });
+      if (isRealSend(outcome.kind)) {
+        sent++;
+      } else if (outcome.kind === "dry_run") {
+        dryRun++;
+      } else if (outcome.kind === "skipped") {
+        // Not a failure, but not a send either — counted separately so the
+        // summary cannot imply these patients were contacted.
+        skipped++;
+        failures.push({ name: patientName, reason: outcome.message });
+      } else {
+        failures.push({ name: patientName, reason: outcome.detail ?? outcome.message });
       }
       setProgress((p) => ({ ...p, done: p.done + 1 }));
     }
 
     setBulkState("done");
     setBulkErrors(failures);
-    const msg = failures.length === 0
-      ? `${sent} SMS skickade`
-      : `${sent} skickade, ${failures.length} misslyckades`;
+    const problems = failures.length - skipped;
+    const parts = [`${sent} skickade`];
+    if (dryRun > 0) parts.push(`${dryRun} i testläge`);
+    if (skipped > 0) parts.push(`${skipped} hoppades över`);
+    if (problems > 0) parts.push(`${problems} misslyckades`);
+    const msg = parts.join(", ");
     setDoneMessage(msg);
+    toast.push({
+      tone: problems > 0 ? "error" : skipped > 0 ? "warning" : "success",
+      title: msg,
+      detail: failures.length > 0
+        ? failures.slice(0, 3).map((f) => `${f.name}: ${f.reason}`).join(" · ")
+        : null,
+    });
     setSelected(new Set());
     setTimeout(() => { setBulkState("idle"); setDoneMessage(null); setBulkErrors([]); }, 10000);
   }
@@ -168,7 +177,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
 
         .pt-cell {
           padding: 16px 18px;
-          font-size: 14px;
+          font-size: 16px;
           color: var(--text);
           overflow: hidden;
           text-overflow: ellipsis;
@@ -192,14 +201,14 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
 
         .pt-name {
           font-weight: 700;
-          font-size: 14.5px;
+          font-size: 16px;
           color: var(--text);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
         .pt-email {
-          font-size: 12.5px;
+          font-size: 14px;
           color: var(--text-faint);
           margin-top: 3px;
           white-space: nowrap;
@@ -207,12 +216,12 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
           text-overflow: ellipsis;
         }
         .pt-phone-main {
-          font-size: 14px;
+          font-size: 16px;
           color: var(--text);
           white-space: nowrap;
         }
         .pt-phone-norm {
-          font-size: 12px;
+          font-size: 14px;
           color: var(--text-faint);
           margin-top: 2px;
           font-variant-numeric: tabular-nums;
@@ -220,25 +229,25 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
         .pt-days {
           font-variant-numeric: tabular-nums;
           font-weight: 700;
-          font-size: 17px;
+          font-size: 19px;
           color: var(--text-mid);
         }
         .pt-days-label {
-          font-size: 10.5px;
+          font-size: 14px;
           color: var(--text-faint);
           text-transform: uppercase;
           letter-spacing: 0.06em;
           margin-top: 1px;
         }
         .pt-treatment {
-          font-size: 13px;
+          font-size: 14px;
           color: var(--text-muted);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
         .pt-date {
-          font-size: 13.5px;
+          font-size: 16px;
           color: var(--text-muted);
           font-variant-numeric: tabular-nums;
           white-space: nowrap;
@@ -262,7 +271,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
         }
         .pt-head-cell {
           padding: 12px 18px;
-          font-size: 11px;
+          font-size: 14px;
           font-weight: 700;
           letter-spacing: 0.07em;
           text-transform: uppercase;
@@ -293,7 +302,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
           to   { opacity: 1; transform: translateY(0); }
         }
         .pt-bulk-count {
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 600;
           color: rgba(255,255,255,0.9);
           flex: 1;
@@ -305,7 +314,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
           border: none;
           border-radius: 5px;
           padding: 6px 14px;
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 600;
           cursor: pointer;
           white-space: nowrap;
@@ -318,7 +327,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
           border: 1px solid rgba(255,255,255,0.2);
           border-radius: 5px;
           padding: 6px 12px;
-          font-size: 12px;
+          font-size: 14px;
           font-weight: 500;
           cursor: pointer;
           white-space: nowrap;
@@ -326,7 +335,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
         }
         .pt-bulk-clear:hover { background: rgba(255,255,255,0.2); }
         .pt-bulk-msg {
-          font-size: 12px;
+          font-size: 14px;
           color: rgba(255,255,255,0.7);
           font-variant-numeric: tabular-nums;
           white-space: nowrap;
@@ -348,7 +357,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
             </span>
           )}
           {bulkState === "done" && bulkErrors.length > 0 && (
-            <span style={{ fontSize: 11.5, color: "var(--red)", lineHeight: 1.4 }}>
+            <span style={{ fontSize: 14, color: "var(--red)", lineHeight: 1.4 }}>
               {bulkErrors.map((e) => `${e.name}: ${e.reason}`).join(" · ")}
             </span>
           )}
@@ -442,12 +451,12 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
                       )}
                     </>
                   ) : (
-                    <span style={{ color: "var(--text-faint)", fontSize: 13 }}>—</span>
+                    <span style={{ color: "var(--text-faint)", fontSize: 14 }}>—</span>
                   )}
                 </div>
 
                 {/* Email column */}
-                <div className="pt-cell" style={{ color: "var(--text-muted)", fontSize: 12.5 }}>
+                <div className="pt-cell" style={{ color: "var(--text-muted)", fontSize: 14 }}>
                   {patient.email ?? <span style={{ color: "var(--text-faint)" }}>—</span>}
                 </div>
 
@@ -464,7 +473,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
                       <div className="pt-days-label">dagar</div>
                     </>
                   ) : (
-                    <span style={{ color: "var(--text-faint)", fontSize: 13 }}>—</span>
+                    <span style={{ color: "var(--text-faint)", fontSize: 14 }}>—</span>
                   )}
                 </div>
 

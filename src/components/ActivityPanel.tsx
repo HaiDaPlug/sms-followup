@@ -144,7 +144,7 @@ function ActivityModal({ onClose }: { onClose: () => void }) {
           <span style={{
             fontFamily: "var(--font-head)",
             fontWeight: 700,
-            fontSize: 15,
+            fontSize: 19,
             color: "#fff",
             letterSpacing: "-0.01em",
           }}>All aktivitet</span>
@@ -158,7 +158,7 @@ function ActivityModal({ onClose }: { onClose: () => void }) {
               border: "1px solid rgba(255,255,255,0.18)",
               borderRadius: 6,
               cursor: "pointer",
-              fontSize: 16,
+              fontSize: 19,
               color: "rgba(255,255,255,0.8)",
               lineHeight: 1,
               padding: "3px 8px",
@@ -172,7 +172,7 @@ function ActivityModal({ onClose }: { onClose: () => void }) {
           {loading ? (
             <SkeletonRows count={8} />
           ) : logs.length === 0 ? (
-            <p style={{ padding: "24px", fontSize: 13, color: "var(--text-muted)" }}>
+            <p style={{ padding: "24px", fontSize: 14, color: "var(--text-muted)" }}>
               Inga påminnelser skickade ännu.
             </p>
           ) : (
@@ -192,17 +192,17 @@ function ActivityModal({ onClose }: { onClose: () => void }) {
                   }}
                 >
                   <div>
-                    <p style={{ fontWeight: 600, fontSize: 14, color: "var(--text)", marginBottom: 3 }}>
+                    <p style={{ fontWeight: 600, fontSize: 16, color: "var(--text)", marginBottom: 3 }}>
                       {log.full_name ?? log.phone ?? "—"}
                     </p>
-                    <p style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                    <p style={{ fontSize: 14, color: "var(--text-muted)" }}>
                       {formatDate(log.created_at)}
                     </p>
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                     {log.sequence_number ? (
                       <span style={{
-                        fontSize: 10.5, fontWeight: 700,
+                        fontSize: 14, fontWeight: 700,
                         color: "var(--text-muted)", letterSpacing: "0.06em",
                         textTransform: "uppercase",
                         background: "var(--surface-sub)",
@@ -232,7 +232,7 @@ function ActivityModal({ onClose }: { onClose: () => void }) {
               style={{
                 padding: "11px 24px",
                 borderTop: "1px solid var(--border)",
-                fontSize: 12,
+                fontSize: 14,
                 color: "var(--text-faint)",
                 background: "var(--surface-sub)",
                 flexShrink: 0,
@@ -290,7 +290,7 @@ export function ActivityPanel({
               background: "none",
               border: "none",
               cursor: "pointer",
-              fontSize: 10.5,
+              fontSize: 14,
               fontWeight: 600,
               letterSpacing: "0.07em",
               textTransform: "uppercase",
@@ -303,7 +303,7 @@ export function ActivityPanel({
         </div>
 
         {preview.length === 0 ? (
-          <p style={{ padding: "16px 20px", fontSize: 13, color: "var(--text-muted)" }}>
+          <p style={{ padding: "16px 20px", fontSize: 14, color: "var(--text-muted)" }}>
             Inga påminnelser skickade ännu.
           </p>
         ) : (
@@ -317,17 +317,17 @@ export function ActivityPanel({
               borderBottom: "1px solid var(--border)",
             }}>
               <div>
-                <p style={{ fontWeight: 500, fontSize: 13.5 }}>
+                <p style={{ fontWeight: 500, fontSize: 16 }}>
                   {log.full_name ?? log.phone ?? "—"}
                 </p>
-                <p style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                <p style={{ fontSize: 14, color: "var(--text-muted)" }}>
                   {formatDate(log.created_at)}
                 </p>
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 {log.sequence_number ? (
                   <span style={{
-                    fontSize: 11, fontWeight: 600,
+                    fontSize: 12, fontWeight: 600,
                     color: "var(--text-muted)", letterSpacing: "0.04em",
                   }}>SMS {log.sequence_number}</span>
                 ) : null}

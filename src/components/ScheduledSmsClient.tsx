@@ -88,7 +88,7 @@ export function ScheduledSmsClient({ initialRows }: { initialRows: ScheduledSmsR
         }
         .ss-head-cell {
           padding: 12px 18px;
-          font-size: 11px;
+          font-size: 14px;
           font-weight: 700;
           letter-spacing: 0.07em;
           text-transform: uppercase;
@@ -111,22 +111,22 @@ export function ScheduledSmsClient({ initialRows }: { initialRows: ScheduledSmsR
         }
         .ss-cell {
           padding: 14px 18px;
-          font-size: 13.5px;
+          font-size: 16px;
           color: var(--text);
           overflow: hidden;
           text-overflow: ellipsis;
         }
         .ss-name {
           font-weight: 700;
-          font-size: 14px;
+          font-size: 16px;
           color: var(--text);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
-        .ss-phone { font-size: 13px; color: var(--text-muted); white-space: nowrap; }
-        .ss-date { font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .ss-content { font-size: 13px; color: var(--text-muted); }
+        .ss-phone { font-size: 14px; color: var(--text-muted); white-space: nowrap; }
+        .ss-date { font-size: 14px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .ss-content { font-size: 14px; color: var(--text-muted); }
       `}</style>
 
       <div className="ss-head">
@@ -169,16 +169,16 @@ export function ScheduledSmsClient({ initialRows }: { initialRows: ScheduledSmsR
                       className="danger"
                       onClick={() => cancel(row.id)}
                       disabled={busyId === row.id}
-                      style={{ fontSize: 12, padding: "5px 12px", minHeight: "unset" }}
+                      style={{ fontSize: 14, padding: "5px 12px", minHeight: "unset" }}
                     >
                       {busyId === row.id ? "…" : "Avbryt"}
                     </button>
                     {errorId === row.id && errorMsg && (
-                      <div style={{ marginTop: 4, fontSize: 11, color: "var(--red)" }}>{errorMsg}</div>
+                      <div style={{ marginTop: 4, fontSize: 12, color: "var(--red)" }}>{errorMsg}</div>
                     )}
                   </>
                 ) : (
-                  <span style={{ color: "var(--text-faint)", fontSize: 13 }}>—</span>
+                  <span style={{ color: "var(--text-faint)", fontSize: 14 }}>—</span>
                 )}
               </div>
             </div>

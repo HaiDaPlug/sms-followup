@@ -58,8 +58,18 @@
   /* Monochrome film grain — SVG fractal noise, tiled */
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
 
-  --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-body: 'Source Sans 3', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-head: 'Merriweather', Georgia, serif;
+
+  /* Type scale — six steps, no in-between sizes. Anything that needs to be
+     "a bit smaller" belongs on the next step down, not on a new value. */
+  --fs-xs:      12px;  /* field hints, kbd shortcuts, incidental chrome */
+  --fs-sm:      14px;  /* uppercase eyebrows + column headers, secondary /
+                          muted text, badges, buttons, nav */
+  --fs-body:    16px;  /* default body, table cells, primary row labels */
+  --fs-lg:      19px;  /* section + panel titles */
+  --fs-title:   28px;  /* page title */
+  --fs-display: 40px;  /* metric values */
 }
 
 /* ─── Reset ──────────────────────────────────────────────────────────────── */
@@ -70,7 +80,7 @@ html, body {
   background: var(--surface-sub);
   color: var(--text);
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -134,14 +144,14 @@ button, input, select, textarea { font: inherit; }
   justify-content: center;
   color: #fff;
   font-family: var(--font-head);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 900;
   flex-shrink: 0;
 }
 
 .brand-name {
   font-family: var(--font-head);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
   color: #fff;
   line-height: 1.2;
@@ -162,7 +172,7 @@ button, input, select, textarea { font: inherit; }
   gap: 9px;
   border-radius: var(--radius-sm);
   padding: 9px 11px;
-  font-size: 13.5px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--sidebar-text);
   transition: color 140ms var(--ease), background 140ms var(--ease);
@@ -195,7 +205,7 @@ button, input, select, textarea { font: inherit; }
 .nav-label { flex: 1; }
 
 .nav-shortcut {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--sidebar-text);
   opacity: 0;
@@ -238,7 +248,7 @@ button, input, select, textarea { font: inherit; }
   margin-top: auto;
   padding: 14px 6px 0;
   border-top: 1px solid var(--sidebar-border);
-  font-size: 11.5px;
+  font-size: 14px;
   color: var(--sidebar-text);
   font-weight: 500;
 }
@@ -366,7 +376,7 @@ button, input, select, textarea { font: inherit; }
 
 .page-title {
   font-family: var(--font-head);
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 900;
   letter-spacing: -0.02em;
   line-height: 1.15;
@@ -376,7 +386,7 @@ button, input, select, textarea { font: inherit; }
 .page-subtitle {
   color: var(--text-muted);
   margin-top: 5px;
-  font-size: 13.5px;
+  font-size: 16px;
 }
 
 /* ─── Grid ───────────────────────────────────────────────────────────────── */
@@ -438,7 +448,7 @@ button, input, select, textarea { font: inherit; }
 
 /* ─── Metrics ────────────────────────────────────────────────────────────── */
 .metric {
-  font-size: 10.5px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -448,7 +458,7 @@ button, input, select, textarea { font: inherit; }
 
 .metric-value {
   font-family: var(--font-head);
-  font-size: 38px;
+  font-size: 40px;
   font-weight: 900;
   letter-spacing: -0.03em;
   line-height: 1;
@@ -458,7 +468,7 @@ button, input, select, textarea { font: inherit; }
 /* ─── Section titles ─────────────────────────────────────────────────────── */
 .section-title {
   font-family: var(--font-head);
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 700;
   color: var(--text);
   margin-bottom: 14px;
@@ -479,7 +489,7 @@ th, td {
 th {
   background: var(--surface-sub);
   color: var(--text-muted);
-  font-size: 10.5px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -492,7 +502,7 @@ tr:last-child td { border-bottom: 0; }
 tbody tr { transition: background 120ms; }
 tbody tr:hover { background: var(--surface-sub); }
 
-.muted { color: var(--text-muted); font-size: 13px; }
+.muted { color: var(--text-muted); font-size: 14px; }
 
 /* ─── Badges ─────────────────────────────────────────────────────────────── */
 @keyframes badge-pulse {
@@ -504,7 +514,7 @@ tbody tr:hover { background: var(--surface-sub); }
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.01em;
   text-transform: none;
@@ -577,7 +587,7 @@ tbody tr:hover { background: var(--surface-sub); }
   color: #fff;
   cursor: pointer;
   display: inline-flex;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   gap: 6px;
   min-height: 34px;
@@ -695,7 +705,7 @@ button:disabled {
   padding: 0 16px !important;
   height: 34px;
   min-height: unset;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -724,7 +734,7 @@ button:disabled {
   border-right: 1px solid var(--border);
   border-radius: 0;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 600;
   padding: 7px 14px;
   min-height: unset;
@@ -745,7 +755,7 @@ button:disabled {
 
 /* Compact variant — sits inside a section heading rather than a toolbar. */
 .seg-sm button {
-  font-size: 11.5px;
+  font-size: 14px;
   font-weight: 500;
   padding: 4px 9px;
 }
@@ -762,7 +772,7 @@ button:disabled {
 .an-attribution-label {
   font-family: var(--font-body);
   font-weight: 400;
-  font-size: 11.5px;
+  font-size: 14px;
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -784,7 +794,7 @@ button:disabled {
   border-radius: 999px;
   background: var(--surface);
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 500;
   padding: 5px 13px;
   transition: all 130ms var(--ease);
@@ -812,7 +822,7 @@ button:disabled {
 .field { display: grid; gap: 5px; }
 
 .field label {
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -836,13 +846,13 @@ button:disabled {
 }
 
 .field textarea { min-height: 120px; resize: vertical; line-height: 1.55; }
-.field-hint { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.field-hint { color: var(--text-muted); font-size: 14px; line-height: 1.45; }
 
 .checkbox-row {
   align-items: center;
   display: flex;
   gap: 9px;
-  font-size: 13.5px;
+  font-size: 16px;
   font-weight: 500;
   cursor: pointer;
 }
@@ -860,7 +870,7 @@ button:disabled {
   border: 1px solid var(--amber-border);
   border-radius: var(--radius);
   color: var(--amber);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
   padding: 12px 16px;
 }
@@ -895,7 +905,7 @@ button:disabled {
   padding: 32px 16px;
   text-align: center;
   color: var(--text-muted);
-  font-size: 13.5px;
+  font-size: 16px;
 }
 
 .divider {
