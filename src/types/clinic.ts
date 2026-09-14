@@ -273,8 +273,6 @@ export type NextSequenceInfo = {
   day: number;
   /** Position in the full day-sorted list, inactive steps included. */
   sequenceNumber: number;
-  /** @deprecated Same as `day`; kept while callers migrate. */
-  daysThreshold: number;
 } | null;
 
 export type DashboardStats = {

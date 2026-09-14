@@ -255,14 +255,12 @@ export async function sendReminderToPatient(
         stepId: overrideStep.id,
         day: overrideStep.day,
         sequenceNumber: stepPosition(steps, overrideStep.id) ?? 1,
-        daysThreshold: overrideStep.day,
       }
     : override && status === "Sent" && steps[0]
       ? {
           stepId: steps[0].id,
           day: steps[0].day,
           sequenceNumber: 1,
-          daysThreshold: steps[0].day,
         }
       : getNextSequence(patient, settings, store.reminder_logs, forceNext);
 

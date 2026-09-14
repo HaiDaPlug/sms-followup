@@ -146,7 +146,6 @@ function toNextSequence(steps: SmsStep[], step: SmsStep): NextSequenceInfo {
     // Position in the FULL sorted list, inactive steps included: this is what
     // sequence_number has always meant and what the 013 indexes key on.
     sequenceNumber: stepPosition(steps, step.id) ?? 1,
-    daysThreshold: step.day,
   };
 }
 

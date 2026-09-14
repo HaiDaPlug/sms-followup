@@ -18,7 +18,7 @@ function candidate(
     lastBookingAt: daysAgo(daysSince),
     daysSince,
     firstDueDay,
-    next: { stepId: STEP, day: sendDay, sequenceNumber: 1, daysThreshold: sendDay },
+    next: { stepId: STEP, day: sendDay, sequenceNumber: 1 },
   };
 }
 
