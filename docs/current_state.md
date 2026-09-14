@@ -1,7 +1,7 @@
 # Current State - Clinic Rebooking Reminder System
 
-**Last updated:** 2026-09-02 (session 19 — production cutover verified, custom domain live, **first webhook bookings and first conversions received end-to-end**)
-**Phase:** Migrations 001–024 are applied to production, verified by calling each function with real arguments. The BokaDirekt webhook is live on the custom domain `sms.khyte.se`, and on 2026-09-02 the first two webhook bookings arrived, auto-matched deterministically, and logged conversions inside the same transaction. **Conversion tracking is now proven end-to-end** — the gap that had blocked analytics since the project began is closed. Remaining gaps are narrower: no delivery receipt has ever been recorded (`delivered` = 0 across 168 sends), and one `pending_booking_match` review item from 17:09 on 2026-09-02 is still unexamined.
+**Last updated:** 2026-09-09 (session 20 — follow-ups V2: stable step ids, per-step activation, overdue-first daily queue, lifetime analytics. **Code complete on `followups-v2`; migrations 025/026 not yet applied and nothing deployed.**)
+**Phase:** Migrations 001–024 are applied to production, verified by calling each function with real arguments. **025 and 026 exist but are unapplied** — see the session 20 rollout order, which is not the usual "apply then deploy". The BokaDirekt webhook is live on the custom domain `sms.khyte.se`, and on 2026-09-02 the first two webhook bookings arrived, auto-matched deterministically, and logged conversions inside the same transaction. **Conversion tracking is now proven end-to-end** — the gap that had blocked analytics since the project began is closed. Remaining gaps are narrower: no delivery receipt has ever been recorded (`delivered` = 0 across 168 sends), and one `pending_booking_match` review item from 17:09 on 2026-09-02 is still unexamined.
 
 ---
 
@@ -161,11 +161,11 @@ Similarly, `order=sent_at.desc` sorts NULLs **first** in PostgREST, so ordering 
 
 ---
 
-## SMS Sequence Logic
+## Follow-up Logic
 
-5 steps seeded in `reminder_settings.sms_steps` (migration 009). Mattias's real templates.
+5 follow-ups seeded in `reminder_settings.sms_steps` (migration 009). Mattias's real templates.
 
-| SMS | Day threshold | Behaviour |
+| Follow-up | Day threshold | Behaviour |
 |-----|--------------|-----------|
 | 1 | 5 | First follow-up |
 | 2 | 14 | Second follow-up |
@@ -173,9 +173,19 @@ Similarly, `order=sent_at.desc` sorts NULLs **first** in PostgREST, so ordering 
 | 4 | 180 | 6-month check-in |
 | 5 | 365 | 12-month check-in |
 
-**Cron:** picks the **highest** threshold crossed that hasn't been sent yet. Patient at day 180 with no history → SMS 4. Next run waits for day 365.
+Each follow-up is `{ id, day, template, active }` (session 20). The `id` is an immutable uuid: `reminder_logs.step_id` references it and `reminder_logs.step_day` snapshots the trigger day at send time, so re-timing, re-ordering or deleting a follow-up cannot change what a historical log meant. `sequence_number` is still written as the position in the day-sorted list, for the labels and the 013 indexes.
 
-**Manual send (`forceNext=true`):** picks the **highest crossed threshold** not yet sent, same as cron. If no new threshold has been crossed since the last send (e.g. testing by re-sending), re-sends the last sent step instead of advancing. This means a patient at 212 days gets SMS 4 on manual send, not SMS 1.
+**Cron:** picks the **highest** threshold crossed that hasn't been sent yet, among **active** follow-ups. Patient at day 180 with no history → the 180-day follow-up. Next run waits for day 365.
+
+**Inactive follow-ups are skipped, never blocking.** With 90 active, 180 inactive and 365 active, a patient who received the 90 goes on to the 365. They remain selectable for a manual or scheduled send, labelled "(inaktiv)" — deactivation governs the automation, not the operator.
+
+**Ordering is by day, not position.** A step already sent is excluded by id as well, so editing its day upward cannot make it eligible again. A sent step's `step_day` bounds the cycle, so a follow-up re-timed from 90 to 180 after the fact still counts as the 90-day message it was.
+
+**Manual send (`forceNext=true`):** picks the highest crossed threshold not yet sent, same as cron. A patient at 212 days gets the 180-day follow-up, not the 5-day one. Manual and scheduled sends pass a step **id**; a request still carrying the old positional `sequenceOverride` is refused with 400 so a stale browser tab cannot send a different message than the operator picked.
+
+**Daily queue.** `max_per_day` (25) is a rate limit, not targeting. Every eligible patient is queued, ordered by **when they first became due** (`last_booking_at` + the earliest active follow-up still owed), and only then capped; the overflow stays eligible for the next run. This drains an old backlog first-come-first-served. Before session 20 the cap fell on `readStore()`'s `created_at desc`, handing every slot to the newest imports and starving old patients indefinitely. The ordering is monotonic per patient: waiting longer only ever improves your position.
+
+**With no active follow-ups**, an untouched patient is `Waiting`, not `Sent` — disabling everything must not make the patient list look like a completed sequence. `Sent` still requires that something actually went out in the cycle.
 
 **Safety gates (always enforced, even on force):** Do not contact, Missing phone, Future booking, Needs review, Delivery pending, No valid booking.
 
@@ -310,8 +320,10 @@ The latest sent/delivered SMS strictly before the booking-recorded timestamp qua
 | 022 | One `last_booking_at` definition; `patient_last_attended_booking`, `refresh_patient_booking_metadata`, `cancel_pending_scheduled_sms`; patient metadata backfill |
 | 023 | Rebooking cancels pending scheduled SMS transactionally; rewrites `apply_bokadirekt_booking` and `cancel_bokadirekt_booking` onto the shared definition |
 | 024 | `stale_cycle` and `out_of_order` added to the `reminder_logs.skip_reason` CHECK constraint |
+| 025 | **Unapplied.** Stable follow-up ids: mints `id`/`active` inside `sms_steps`, adds `reminder_logs.step_id`/`step_day` and `scheduled_sms.step_id`, backfills them from position, adds step-keyed unique indexes beside the 013 ones, adds `step_removed` to the skip-reason CHECK |
+| 026 | **Unapplied, and only after Deploy B.** Re-runs the 025 backfill, then drops the two position-keyed unique indexes from 013 |
 
-**Applied in production:** 001–024 (022–024 confirmed 2026-09-02).
+**Applied in production:** 001–024 (022–024 confirmed 2026-09-02). 025 and 026 are written but unapplied.
 
 Verified individually rather than assumed, each by calling with real arguments:
 
@@ -617,6 +629,51 @@ Worth preserving as a judgment, not a defect: a booking four months after a sing
 
 ---
 
+## Session 20 — Follow-ups V2: Stable Ids, Activation, Queue, Lifetime Analytics
+
+Branch `followups-v2`. Code complete, 160 tests + typecheck + build green. **Nothing is applied or deployed yet** — the rollout below is not the usual order and the sequence matters.
+
+### Why
+
+Two problems, both of mental model rather than plumbing.
+
+**A step had no identity.** `sms_steps` was `{day, template}` and `reminder_logs.sequence_number` was literally the 1-based index into that array, sorted by day. Insert a follow-up in the middle, delete one, or re-time one, and every historical log silently came to mean a different message. The duplicate-send guard from 013 was keyed on the same position, so a shifted list could also raise a false collision — blocking a legitimate send with "Redan reserverad" — or miss a real duplicate.
+
+**The daily cap was doing targeting.** `processDailyReminders` filtered to Ready and then took `.slice(0, max_per_day)` with no sort, so the order came from `readStore()`'s `patients.created_at desc`. The newest imports won every slot and an old backlog could starve indefinitely.
+
+### What changed
+
+- **Stable ids.** Each follow-up is `{ id, day, template, active }`. Logs carry `step_id` plus a `step_day` snapshot. Ids preserve identity, the snapshot preserves historical meaning — a message sent as the 90-day follow-up stays a 90-day fact even if that step is later re-timed to 180.
+- **Per-follow-up activation.** Inactive steps are skipped by the automation without blocking later ones, and stay selectable manually. With none active, untouched patients read `Waiting`, not `Sent`.
+- **Overdue-first queue.** Patients are ordered by when they first became due, then capped. `src/lib/reminders/queue.ts` is pure and carries the reasoning.
+- **Step ids on the wire.** Manual and scheduled sends pass an id; a request carrying the old positional field is refused with 400 rather than being treated as "no step chosen", which would have sent a different message than the operator picked. A step deleted before its scheduled row fires is a clean `step_removed` skip — never a throw, which the worker would have recorded as a false `unknown` on a message that was never sent.
+- **Lifetime analytics.** `src/lib/analytics/lifetime.ts` answers "did they ever come back" separately from "can we credit the SMS", from one chronological pass so attributed is always a subset of eventual. A booking closes its follow-up cycle, so a patient returning three times after one message is one rebooking, not three. Bookings are dated by the earlier of their record and their appointment, so a CSV import timestamp cannot inflate the gap.
+
+### Rollout order — Deploy A → 025 → Deploy B → 026
+
+Not the usual "apply then deploy". Both halves of the ordering are load-bearing:
+
+1. **Deploy A** = commit `50711f2`, "Give follow-up steps stable ids and protect them on save". Ships the id-preserving settings route with no visible change. It must be live **before** 025, because the live settings route replaces `sms_steps` wholesale: a Settings save from the old UI after 025 would strip the freshly minted ids while `reminder_logs` already referenced them. After this deploy an id-less save is refused with "Ladda om sidan och försök igen".
+2. **Apply 025** (`npx supabase db push`), then run the verification queries in the migration header. Confirm PostgREST sees the new columns before continuing: `supabase.from("reminder_logs").select("step_id, step_day").limit(1)` from Node with the service role.
+3. **Deploy B** = the rest of the branch. It must come **after** 025, because PostgREST rejects an insert naming an unknown column (PGRST204): every send path would fail, and the scheduled worker's catch would mark its claimed rows `unknown` — messages recorded as possibly-sent that were never attempted.
+4. **Apply 026** the same day, once `select count(*) from reminder_logs where status in ('pending','unknown','sent','dry_run','delivered') and step_id is null and created_at > '<Deploy B timestamp>'` returns 0.
+
+**Between 025 and 026, do not add, delete, reorder, or re-time a follow-up.** Both index families are live in that window, and any change to sorted positions lets a correct day-based send collide on the position-keyed index. Template text is safe; so is the Aktiv toggle once Deploy B is live.
+
+### Verification
+
+- `npm run typecheck`, `npm test` (160 across 14 files), `npm run build` — all pass.
+- **Not run:** no migration has touched a database, no browser check of `/app/settings` or `/app/analytics`, no cron dry-run. The SQL is reviewed only, as with every migration in this project (no local Postgres).
+
+### Open after this session
+
+- Everything in the rollout order above.
+- The delivery-receipt gap and the open `pending_booking_match` from session 19 are untouched.
+- `/api/reminders/test` still renders the legacy `sms_template` and is unaware of follow-ups.
+- Campaigns remain deliberately out of scope: follow-ups are time-since-visit automation, campaigns would be one-off cohort sends. Nothing here forecloses them.
+
+---
+
 ## Typography and Type Scale
 
 ### Body font: Inter → Source Sans 3
@@ -659,11 +716,19 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 
 ### Blocking / highest value
 
+- [ ] **Roll out follow-ups V2 in order: Deploy A → 025 → Deploy B → 026.** See the session 20 rollout section for why each step precedes the next and what breaks if they are swapped. Deploy A is commit `50711f2`; the freeze on structural step edits holds from 025 until 026.
+  - [ ] Deploy A (id-preserving settings route), then confirm an id-less settings save is refused
+  - [ ] `npx supabase db push` for 025, then run the verification queries in its header
+  - [ ] Confirm PostgREST sees `step_id`/`step_day` before deploying further
+  - [ ] Deploy B (rest of `followups-v2`)
+  - [ ] Browser check: toggle a follow-up off, save, reload; schedule dialog lists it as "(inaktiv)"; `/app/analytics` shows "Sedan start"
+  - [ ] Cron dry-run with `dry_run_mode` on: results ordered oldest-due first, each carrying `stepId`/`stepDay`
+  - [ ] Apply 026 once no post-deploy row lacks `step_id`
 - [x] ~~**Apply and validate migrations 022–024.**~~ Applied and verified in production 2026-09-02 by direct RPC calls.
 - [x] ~~**Disable optional inline polling for production batches.**~~ `SMS_VERIFY_DELIVERY=off` set in Vercel 2026-09-02.
 - [ ] **Investigate why no delivery receipt has ever landed.** `delivered` is 0 across 168 sends while 46elks reports recent messages delivered. Secret and app URL are both verified correct. Send one test SMS and watch whether the row advances within a minute; if not, redeploy to clear any warm function holding the stale URL.
 - [ ] **Examine the open `pending_booking_match` from 17:09 on 2026-09-02** — it predates both successful bookings and has not been looked at.
-- [ ] **Merge `typography-scale` to `main`.** Migration 024 removed the blocking constraint; typecheck and 76 tests pass.
+- [ ] **Merge `typography-scale` to `main`.** Migration 024 removed the blocking constraint; typecheck and tests pass. `followups-v2` branches from it, so merging that first would carry both.
 - [ ] **Smoke test session 18 against real integrations.** Cover webhook rebooking, CSV rebooking after the appointment passes, pending scheduled-row cancellation, a row already in `processing`, out-of-order schedule refusal, accepted 46elks sends, webhook-delivered/failed transitions, and failed retry review-item reuse.
 - [x] ~~**Wire and test the BokaDirekt webhook.**~~ Live on `sms.khyte.se` for all three event types; first two bookings received 2026-09-02, both auto-matched, both logging conversions. Conversion tracking is proven end-to-end.
 - [ ] **Test the Supabase `pg_cron` scheduled-SMS job end-to-end.** Never verified against a live tick. Steps:
@@ -707,8 +772,13 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 `npm run test` runs `vitest run`. Coverage is intentionally narrow — it targets specific safety guarantees added during hardening passes rather than the whole app:
 
 - `src/lib/storage/store.test.ts` — scheduled-SMS cancel/complete/claim conditional-update guarantees
-- `src/lib/reminders/process.test.ts` — scheduled-SMS delivery outcomes, CSV/webhook stale-cycle refusal, provider verification, and delivered counting
-- `src/lib/reminders/sequenceOrder.test.ts` — explicit sequence bounds and current-cycle ordering
+- `src/lib/reminders/process.test.ts` — scheduled-SMS delivery outcomes, CSV/webhook stale-cycle refusal, provider verification, delivered counting, step resolution by id, and daily-queue ordering under the cap
+- `src/lib/reminders/nextStep.test.ts` — follow-up selection by day/id: highest crossed threshold, inactive steps skipped without blocking, re-timed and deleted steps bounded by their snapshot, ordering guards, and the Waiting/Sent split when nothing is active (replaced `sequenceOrder.test.ts`)
+- `src/lib/reminders/steps.test.ts` — step normalization, stable fallback ids, and the editing view that never persists them
+- `src/lib/reminders/validateSteps.test.ts` — id minting, the stale-tab rejection, and duplicate id/day refusal
+- `src/lib/reminders/queue.test.ts` — oldest-due-first ordering, monotonicity across a threshold, deterministic tie-breaks, and purity
+- `src/lib/analytics/lifetime.test.ts` — one credit per follow-up cycle, the import-timestamp guard, bucket boundaries, per-step labelling, and attributed ⊆ eventual
+- `app/api/settings/route.test.ts` — id minting and the stale-tab 400 at the route boundary
 - `src/lib/sms/outcome.test.ts` — six-state outcome mapping, provider-confirmed delivery, and sent/delivered counting
 - `src/lib/sms/verifyDelivery.test.ts` — bounded 46elks polling, terminal outcomes, unreachable/disabled behavior, and hanging-request deadline enforcement
 - `app/api/reminders/send-message/route.test.ts` — repeated failed retries reuse one review item and return the resolved error
@@ -716,7 +786,7 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 - `src/lib/analytics/conversionRate.test.ts` — distinct-patient counting, null vs. 0 %, and the intersection that keeps the rate ≤ 100 %
 - `src/lib/analytics/attributionWindow.test.ts` — exclusive upper bound, untrusted query-param parsing, and the monotonicity property that makes the window safe to change retroactively
 
-**76 tests across 9 files.** Provider HTTP is mocked and route/database behavior is simulated; nothing exercises a real database, real 46elks traffic, Vercel runtime limits, or the RLS policies — see the session 16 and session 18 gaps.
+**160 tests across 14 files.** Provider HTTP is mocked and route/database behavior is simulated; nothing exercises a real database, real 46elks traffic, Vercel runtime limits, or the RLS policies — see the session 16 and session 18 gaps.
 
 `src/test/mockSupabase.ts` provides a small reusable chainable Supabase mock for tests that need to assert on `.eq()`/`.update()` call arguments without a live database.
 
