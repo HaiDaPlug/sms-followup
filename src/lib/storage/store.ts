@@ -186,6 +186,8 @@ export async function resetPatientCycle(
     message: "",
     status: "cycle_reset",
     sequence_number: null,
+    step_id: null,
+    step_day: null,
     is_cycle_reset: true,
     provider_message_id: null,
     skip_reason: null,

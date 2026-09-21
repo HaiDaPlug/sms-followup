@@ -32,7 +32,9 @@ export type SkipReason =
   /** Scheduled send whose booking cycle was reset before it fired. */
   | "stale_cycle"
   /** Requested step is behind one already sent in this cycle. */
-  | "out_of_order";
+  | "out_of_order"
+  /** The requested follow-up step no longer exists in the settings. */
+  | "step_removed";
 
 export type Patient = {
   id: string;
@@ -71,9 +73,28 @@ export type Booking = {
   updated_at: string;
 };
 
-export type SmsStep = {
+/**
+ * A follow-up step as stored in reminder_settings.sms_steps. `id` and `active`
+ * are optional only because rows written before migration 025 lack them; the
+ * settings route and migration 025 fill them in, and resolveSteps() never
+ * hands the engine a step without both.
+ */
+export type StoredSmsStep = {
+  id?: string;
   day: number;
   template: string;
+  active?: boolean;
+};
+
+/** A follow-up step as resolved for the engine and the UI. */
+export type SmsStep = {
+  /** Stable, immutable UUID. Historical logs reference this, never the array position. */
+  id: string;
+  /** Days after the patient's latest valid booking at which this step is due. */
+  day: number;
+  template: string;
+  /** Inactive steps are skipped by the daily automation but stay selectable manually. */
+  active: boolean;
 };
 
 export type ReminderSettings = {
@@ -85,8 +106,8 @@ export type ReminderSettings = {
   sms_template: string;
   sms_template_2: string;
   sms_template_3: string;
-  /** Variable-length sequence: [{day, template}, ...] sorted by day ascending */
-  sms_steps: SmsStep[] | null;
+  /** Variable-length sequence: [{id, day, template, active}, ...] sorted by day ascending */
+  sms_steps: StoredSmsStep[] | null;
   booking_link: string;
   clinic_name: string;
   is_active: boolean;
@@ -103,8 +124,12 @@ export type ReminderLog = {
   phone: string | null;
   message: string;
   status: ReminderLogStatus;
-  /** Which SMS in the sequence this was: 1, 2, or 3. null for non-SMS logs. */
+  /** Position of the step in the day-sorted list at send time. null for non-SMS logs. */
   sequence_number: number | null;
+  /** Immutable id of the follow-up step this row reserved. null for non-step logs. */
+  step_id: string | null;
+  /** Trigger day of that step at send time — survives the step being deleted or re-timed. */
+  step_day: number | null;
   /** True when a new booking reset this patient's cycle */
   is_cycle_reset: boolean;
   provider_message_id: string | null;
@@ -123,6 +148,8 @@ export type ScheduledSms = {
   recipient_phone: string | null;
   /** Sequence step resolved and frozen when the job is created. */
   sequence_override: number | null;
+  /** Immutable id of that step. Survives a later re-ordering of the step list. */
+  step_id: string | null;
   /** Fully rendered message snapshot frozen when the job is created. */
   message_override: string | null;
   scheduled_for: string;
@@ -238,10 +265,14 @@ export type PatientReminderStatus =
   | "Waiting"
   | "No valid booking";
 
-/** Which SMS in the sequence should be sent next, or null if none due yet / all sent */
+/** Which follow-up should be sent next, or null if none due yet / all sent */
 export type NextSequenceInfo = {
+  /** Immutable id of the step — what the send is actually keyed on. */
+  stepId: string;
+  /** Its trigger day, snapshotted onto the log. */
+  day: number;
+  /** Position in the full day-sorted list, inactive steps included. */
   sequenceNumber: number;
-  daysThreshold: number;
 } | null;
 
 export type DashboardStats = {

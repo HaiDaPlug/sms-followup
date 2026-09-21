@@ -1,7 +1,15 @@
 import "server-only";
 import { createSupabaseServer } from "@/lib/supabase/server";
+import { getSettings } from "@/lib/data/repository";
+import { resolveSteps } from "@/lib/reminders/steps";
 import { buildStockholmDayKeys, stockholmDayKey, windowStartIso } from "@/lib/analytics/dayKeys";
 import { calculateConversionRate } from "@/lib/analytics/conversionRate";
+import {
+  calculateLifetimeStats,
+  type LifetimeBooking,
+  type LifetimeLog,
+  type LifetimeStats,
+} from "@/lib/analytics/lifetime";
 import {
   DEFAULT_ATTRIBUTION_DAYS,
   filterByAttributionWindow,
@@ -38,6 +46,8 @@ export interface AnalyticsConversionRow {
   reminder_log_sent_at: string;
   days_since_sms: number;
   sequence_number: number | null;
+  /** Trigger day of the credited follow-up, when it can still be resolved. */
+  step_day: number | null;
 }
 
 export interface AnalyticsData {
@@ -57,6 +67,8 @@ export interface AnalyticsData {
   /** Recorded candidates that fell outside the attribution window. Surfaced so
    *  a narrow window doesn't look like missing data. */
   conversionsOutsideWindow: number;
+  /** All-time performance, independent of the selected period. */
+  lifetime: LifetimeStats;
 }
 
 /**
@@ -115,10 +127,12 @@ export async function getAnalyticsData(
     id: string; patient_id: string | null; patient_name: string | null;
     booking_effective_at: string; reminder_log_sent_at: string;
     days_since_sms: number; reminder_log_sequence_number: number | null;
+    reminder_log_id: string | null;
     match_type: string;
   };
+  type LifetimeLogRecord = LifetimeLog;
 
-  const [bookings, smsLogs, patients, conversions] = await Promise.all([
+  const [bookings, smsLogs, patients, conversions, lifetimeLogs, settings] = await Promise.all([
     fetchAllRows<BookingRecord>(
       () =>
         supabase
@@ -150,7 +164,7 @@ export async function getAnalyticsData(
         supabase
           .from("sms_conversions")
           .select(
-            "id, patient_id, patient_name, booking_effective_at, reminder_log_sent_at, days_since_sms, reminder_log_sequence_number, match_type"
+            "id, patient_id, patient_name, booking_effective_at, reminder_log_sent_at, days_since_sms, reminder_log_sequence_number, reminder_log_id, match_type"
           )
           .eq("cancelled", false)
           .gte("booking_effective_at", since)
@@ -158,8 +172,65 @@ export async function getAnalyticsData(
           .order("id", { ascending: false }),
       "conversions"
     ),
+    // All-time, unfiltered by period: the lifetime block answers "did they ever
+    // come back", which no window can express.
+    fetchAllRows<LifetimeLogRecord>(
+      () =>
+        supabase
+          .from("reminder_logs")
+          .select("id, patient_id, sent_at, step_id, step_day, sequence_number")
+          .in("status", ["sent", "delivered"])
+          .not("sent_at", "is", null)
+          .order("id", { ascending: true }),
+      "lifetime SMS logs"
+    ),
+    // Service role, server-side: reminder_settings is deliberately not readable
+    // with the anon key, so step labels cannot come from the queries above.
+    getSettings(),
   ]);
 
+
+  // Bookings that could possibly follow an SMS. Anything recorded before the
+  // first message ever sent can credit nothing, which excludes the bulk CSV
+  // import outright.
+  const firstSentAt = lifetimeLogs
+    .map((l) => l.sent_at)
+    .filter((s): s is string => !!s)
+    .sort()
+    .at(0) ?? null;
+
+  type LifetimeBookingRecord = {
+    id: string; patient_id: string | null; booking_at: string | null;
+    event_created_at?: string | null; created_at: string; cancelled?: boolean;
+  };
+  const lifetimeBookingRows = firstSentAt
+    ? await fetchAllRows<LifetimeBookingRecord>(
+        () =>
+          supabase
+            .from("bookings")
+            .select("id, patient_id, booking_at, event_created_at, created_at, cancelled")
+            .eq("cancelled", false)
+            .or(`event_created_at.gte.${firstSentAt},and(event_created_at.is.null,created_at.gte.${firstSentAt})`)
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: false }),
+        "lifetime bookings"
+      )
+    : [];
+
+  const lifetimeBookings: LifetimeBooking[] = lifetimeBookingRows.map((b) => ({
+    id: b.id,
+    patient_id: b.patient_id,
+    recorded_at: b.event_created_at ?? b.created_at,
+    booking_at: b.booking_at,
+    cancelled: b.cancelled ?? false,
+  }));
+
+  const lifetime = calculateLifetimeStats(
+    lifetimeLogs,
+    lifetimeBookings,
+    resolveSteps(settings).map((step) => ({ id: step.id, day: step.day, active: step.active })),
+    attributionDays
+  );
 
   const bookingsByDay: Record<string, number> = {};
   for (const b of bookings ?? []) {
@@ -204,6 +275,11 @@ export async function getAnalyticsData(
   // attribution window here so the same rows can answer any window.
   const attributed = filterByAttributionWindow(conversions, attributionDays);
 
+  // The credited SMS is labelled by its follow-up day rather than its position,
+  // which is only meaningful against the step list as it stood at the time.
+  const logDayById = new Map(
+    lifetimeLogs.map((l) => [l.id, l.step_day ?? null] as const)
+  );
   const conversionRows: AnalyticsConversionRow[] = attributed.map((c) => ({
     id: c.id,
     patient_name: c.patient_name,
@@ -211,6 +287,7 @@ export async function getAnalyticsData(
     reminder_log_sent_at: c.reminder_log_sent_at,
     days_since_sms: c.days_since_sms,
     sequence_number: c.reminder_log_sequence_number,
+    step_day: c.reminder_log_id ? (logDayById.get(c.reminder_log_id) ?? null) : null,
   }));
 
   const { smsPatientCount, conversionRate } = calculateConversionRate(
@@ -229,5 +306,6 @@ export async function getAnalyticsData(
     days,
     attributionDays,
     conversionsOutsideWindow: conversions.length - attributed.length,
+    lifetime,
   };
 }

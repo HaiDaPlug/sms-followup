@@ -1,4 +1,4 @@
-import type { Booking, ClinicStore, Patient, ReminderLog, ReminderSettings, ScheduledSms, SkipReason } from "@/types/clinic";
+import type { Booking, ClinicStore, NextSequenceInfo, Patient, ReminderLog, ReminderSettings, ScheduledSms, SkipReason } from "@/types/clinic";
 import {
   addReminderLog,
   addReviewItem,
@@ -18,6 +18,7 @@ import { sendSms } from "@/lib/sms/provider";
 import { resolveDelivery } from "@/lib/sms/resolveDelivery";
 import {
   calculatePatientReminderStatus,
+  evaluateNextStep,
   getNextSequence,
   latestValidBooking,
   renderSmsTemplate,
@@ -25,11 +26,27 @@ import {
   unresolvedPlaceholders,
   validateSequenceOrder
 } from "./eligibility";
+import { stepById, stepPosition } from "./steps";
+import { prioritizeQueue, overdueDays, type QueueCandidate } from "./queue";
 import { isFutureBooking } from "@/lib/import/normalizers";
 
-function templateForSequence(settings: ReminderSettings, seq: number): string {
-  const steps = resolveSteps(settings);
-  return steps[seq - 1]?.template ?? settings.sms_template;
+/**
+ * The step a 1-based sequence position refers to, or null when the position no
+ * longer exists. Every log row snapshots the id and the day so history keeps
+ * its meaning after the step list is re-ordered, re-timed, or trimmed.
+ */
+function stepSnapshot(
+  settings: ReminderSettings,
+  seq: number | null
+): { step_id: string | null; step_day: number | null } {
+  if (seq === null) return { step_id: null, step_day: null };
+  const step = resolveSteps(settings)[seq - 1];
+  return { step_id: step?.id ?? null, step_day: step?.day ?? null };
+}
+
+/** Resolve an explicitly requested step, or null when it no longer exists. */
+function resolveStepForSend(settings: ReminderSettings, stepId: string) {
+  return stepById(resolveSteps(settings), stepId) ?? null;
 }
 
 function toSkipReason(status: string): SkipReason {
@@ -57,6 +74,8 @@ async function addDuplicateReservationLog(
     message: "",
     status: "skipped",
     sequence_number: null,
+    step_id: null,
+    step_day: null,
     is_cycle_reset: false,
     provider_message_id: null,
     skip_reason: "sequence_complete",
@@ -133,14 +152,14 @@ async function reconcileStalePendingDeliveries(): Promise<void> {
  * Sends a reminder to a single patient. Accepts the pre-loaded store so the
  * daily batch doesn't re-fetch from the DB for every patient.
  *
- * Pass `sequenceOverride` (1-based) to force a specific template instead of
- * the automatically calculated next step.
+ * Pass `stepOverride` (a follow-up id) to force a specific step instead of the
+ * automatically calculated next one.
  */
 export async function sendReminderToPatient(
   patient: Patient,
   store: ClinicStore,
   forceDryRun = false,
-  sequenceOverride?: number,
+  stepOverride?: string,
   forceNext = false,
   frozenMessage?: string,
   scheduledSmsId?: string
@@ -177,6 +196,8 @@ export async function sendReminderToPatient(
         message: "",
         status: "skipped",
         sequence_number: null,
+        step_id: null,
+        step_day: null,
         is_cycle_reset: false,
         provider_message_id: null,
         skip_reason: toSkipReason(status),
@@ -185,8 +206,8 @@ export async function sendReminderToPatient(
       });
     }
 
-    // Soft blocks (Waiting, Sent): allow through for forceNext, sequenceOverride, or allow_same_number_override
-    if (!forceNext && !sequenceOverride && !(override && status === "Sent")) {
+    // Soft blocks (Waiting, Sent): allow through for forceNext, an explicit step, or allow_same_number_override
+    if (!forceNext && stepOverride === undefined && !(override && status === "Sent")) {
       return addReminderLog({
         patient_id: patient.id,
         booking_id: latest?.id ?? null,
@@ -194,6 +215,8 @@ export async function sendReminderToPatient(
         message: "",
         status: "skipped",
         sequence_number: null,
+        step_id: null,
+        step_day: null,
         is_cycle_reset: false,
         provider_message_id: null,
         skip_reason: toSkipReason(status),
@@ -203,10 +226,42 @@ export async function sendReminderToPatient(
     }
   }
 
-  const next = sequenceOverride
-    ? { sequenceNumber: sequenceOverride, daysThreshold: 0 }
-    : override && status === "Sent"
-      ? { sequenceNumber: 1, daysThreshold: 0 }
+  const steps = resolveSteps(settings);
+
+  // Resolved before any reservation: a step that has since been deleted must
+  // never reach the provider, and must not throw either — in the scheduled
+  // worker a throw becomes a false "unknown" on a message never sent.
+  const overrideStep = stepOverride !== undefined ? resolveStepForSend(settings, stepOverride) : null;
+  if (stepOverride !== undefined && !overrideStep) {
+    return addReminderLog({
+      patient_id: patient.id,
+      booking_id: latest?.id ?? null,
+      phone: patient.normalized_phone,
+      message: "",
+      status: "skipped",
+      sequence_number: null,
+      step_id: null,
+      step_day: null,
+      is_cycle_reset: false,
+      provider_message_id: null,
+      skip_reason: "step_removed",
+      error: "Uppföljningen finns inte längre",
+      sent_at: null
+    });
+  }
+
+  const next: NextSequenceInfo = overrideStep
+    ? {
+        stepId: overrideStep.id,
+        day: overrideStep.day,
+        sequenceNumber: stepPosition(steps, overrideStep.id) ?? 1,
+      }
+    : override && status === "Sent" && steps[0]
+      ? {
+          stepId: steps[0].id,
+          day: steps[0].day,
+          sequenceNumber: 1,
+        }
       : getNextSequence(patient, settings, store.reminder_logs, forceNext);
 
   if (!next) {
@@ -217,6 +272,8 @@ export async function sendReminderToPatient(
       message: "",
       status: "skipped",
       sequence_number: null,
+      step_id: null,
+      step_day: null,
       is_cycle_reset: false,
       provider_message_id: null,
       skip_reason: "sequence_complete",
@@ -225,15 +282,15 @@ export async function sendReminderToPatient(
     });
   };
 
-  // An explicit sequenceOverride skips getNextSequence() above, so the ordering
-  // logic never runs for scheduled or manually-picked steps. Without this check
-  // a step behind one already sent in this cycle would be accepted, sent to the
+  // An explicit step skips getNextSequence() above, so the ordering logic never
+  // runs for scheduled or manually-picked steps. Without this check a step
+  // behind one already sent in this cycle would be accepted, sent to the
   // provider, and then blocked only by the unique index — which reports back as
   // a bare duplicate rather than saying the step was out of order.
-  if (sequenceOverride) {
+  if (stepOverride !== undefined) {
     const orderError = validateSequenceOrder(
       patient.id,
-      sequenceOverride,
+      stepOverride,
       settings,
       store.reminder_logs
     );
@@ -244,7 +301,9 @@ export async function sendReminderToPatient(
         phone: patient.normalized_phone,
         message: "",
         status: "skipped",
-        sequence_number: sequenceOverride,
+        sequence_number: next.sequenceNumber,
+        step_id: next.stepId,
+        step_day: next.day,
         is_cycle_reset: false,
         provider_message_id: null,
         skip_reason: "out_of_order",
@@ -254,7 +313,7 @@ export async function sendReminderToPatient(
     }
   }
 
-  const template = templateForSequence(settings, next.sequenceNumber);
+  const template = stepById(steps, next.stepId)?.template ?? settings.sms_template;
   const message = frozenMessage ?? renderSmsTemplate(template, patient, settings);
 
   const unresolved = unresolvedPlaceholders(message);
@@ -270,6 +329,8 @@ export async function sendReminderToPatient(
         patient_id: patient.id,
         phone: patient.normalized_phone,
         sequence_number: next.sequenceNumber,
+        step_id: next.stepId,
+        step_day: next.day,
         rendered_message: message,
         booking_id: latest?.id ?? null,
       },
@@ -281,6 +342,8 @@ export async function sendReminderToPatient(
       message,
       status: "skipped",
       sequence_number: null,
+      step_id: null,
+      step_day: null,
       is_cycle_reset: false,
       provider_message_id: null,
       skip_reason: "unresolved_placeholder",
@@ -300,6 +363,8 @@ export async function sendReminderToPatient(
         message,
         status: "dry_run",
         sequence_number: next.sequenceNumber,
+        step_id: next.stepId,
+        step_day: next.day,
         is_cycle_reset: false,
         provider_message_id: null,
         skip_reason: null,
@@ -330,6 +395,8 @@ export async function sendReminderToPatient(
       message,
       status: "pending",
       sequence_number: next.sequenceNumber,
+      step_id: next.stepId,
+      step_day: next.day,
       is_cycle_reset: false,
       provider_message_id: null,
       skip_reason: null,
@@ -374,6 +441,8 @@ export async function sendReminderToPatient(
         patient_id: patient.id,
         phone: patient.normalized_phone,
         sequence_number: next.sequenceNumber,
+        step_id: next.stepId,
+        step_day: next.day,
         rendered_message: message,
         booking_id: bookingId,
       },
@@ -394,6 +463,8 @@ export async function sendReminderToPatient(
         patient_id: patient.id,
         phone: patient.normalized_phone,
         sequence_number: next.sequenceNumber,
+        step_id: next.stepId,
+        step_day: next.day,
         rendered_message: message,
         booking_id: bookingId,
       },
@@ -469,15 +540,38 @@ export async function processDailyReminders() {
 
   const cohort = buildCohortCounts(store);
 
-  const eligible = store.patients
-    .filter(
-      (patient) =>
-        !activeScheduledPatientIds.has(patient.id) &&
-        calculatePatientReminderStatus(
-          patient, settings, store.bookings, store.reminder_logs, store.review_items
-        ) === "Ready"
-    )
-    .slice(0, settings.max_per_day);
+  // Build the whole eligible queue first, then order it, then apply the cap:
+  // max_per_day is a rate limit and must not double as targeting logic. The
+  // step is resolved once per patient here rather than again inside the send.
+  const candidates: { patient: Patient; queue: QueueCandidate }[] = [];
+  for (const patient of store.patients) {
+    if (activeScheduledPatientIds.has(patient.id)) continue;
+    const status = calculatePatientReminderStatus(
+      patient, settings, store.bookings, store.reminder_logs, store.review_items
+    );
+    if (status !== "Ready") continue;
+
+    const { next, firstDueDay } = evaluateNextStep(patient, settings, store.reminder_logs);
+    if (!next || firstDueDay === null || !patient.last_booking_at) continue;
+
+    candidates.push({
+      patient,
+      queue: {
+        patientId: patient.id,
+        lastBookingAt: patient.last_booking_at,
+        daysSince: Math.floor((Date.now() - new Date(patient.last_booking_at).getTime()) / 86_400_000),
+        firstDueDay,
+        next,
+      },
+    });
+  }
+
+  const queueOrder = new Map(candidates.map((c) => [c.patient.id, c.queue]));
+  // Sort a copy of the queue only — store.reminder_logs must stay newest-first,
+  // which is what logsInCurrentCycle relies on to find the cycle boundary.
+  const eligible = prioritizeQueue(candidates.map((c) => c.queue))
+    .slice(0, settings.max_per_day)
+    .map((q) => candidates.find((c) => c.patient.id === q.patientId)!.patient);
 
   const results: {
     patientId: string;
@@ -485,9 +579,13 @@ export async function processDailyReminders() {
     status: string;
     error: string | null;
     sequenceNumber: number | null;
+    stepId: string | null;
+    stepDay: number | null;
+    overdueDays: number | null;
   }[] = [];
 
   for (const patient of eligible) {
+    const queued = queueOrder.get(patient.id);
     try {
       const log = await sendReminderToPatient(patient, store);
       results.push({
@@ -496,6 +594,9 @@ export async function processDailyReminders() {
         status: log.status,
         error: log.error ?? null,
         sequenceNumber: log.sequence_number ?? null,
+        stepId: log.step_id ?? null,
+        stepDay: log.step_day ?? null,
+        overdueDays: queued ? overdueDays(queued) : null,
       });
     } catch (err) {
       results.push({
@@ -504,6 +605,9 @@ export async function processDailyReminders() {
         status: "failed",
         error: err instanceof Error ? err.message : "Oväntat fel",
         sequenceNumber: null,
+        stepId: null,
+        stepDay: null,
+        overdueDays: queued ? overdueDays(queued) : null,
       });
     }
   }
@@ -558,6 +662,9 @@ export async function processScheduledSms() {
       // belongs to a booking cycle the patient has since moved on from.
       if (isStaleScheduledSend(scheduled, patient, store.bookings)) {
         const error = "Avbruten: patienten har bokat en ny tid sedan SMS:et schemalades";
+        // The row's own frozen step, not a re-resolution: it is the step this
+        // schedule was created for, even if the list has moved on since.
+        const scheduledStep = stepSnapshot(store.reminder_settings[0], scheduled.sequence_override);
         const log = await addReminderLog({
           patient_id: patient.id,
           booking_id: scheduled.booking_id,
@@ -565,6 +672,8 @@ export async function processScheduledSms() {
           message: "",
           status: "skipped",
           sequence_number: scheduled.sequence_override,
+          step_id: scheduled.step_id ?? scheduledStep.step_id,
+          step_day: scheduledStep.step_day,
           is_cycle_reset: false,
           provider_message_id: null,
           skip_reason: "stale_cycle",
@@ -576,11 +685,18 @@ export async function processScheduledSms() {
         continue;
       }
 
+      // The id the row was created with wins; the frozen position is only a
+      // fallback for rows scheduled before ids existed.
+      const scheduledStepId =
+        scheduled.step_id ??
+        stepSnapshot(store.reminder_settings[0], scheduled.sequence_override).step_id ??
+        undefined;
+
       const log = await sendReminderToPatient(
         patient,
         store,
         false,
-        scheduled.sequence_override ?? undefined,
+        scheduledStepId,
         true,
         scheduled.message_override ?? undefined,
         scheduled.id

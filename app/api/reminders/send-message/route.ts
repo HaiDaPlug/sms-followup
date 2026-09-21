@@ -9,6 +9,7 @@ import {
   calculatePatientReminderStatus,
   latestValidBooking,
 } from "@/lib/reminders/eligibility";
+import { resolveSteps } from "@/lib/reminders/steps";
 import { sendSms } from "@/lib/sms/provider";
 import { outcomeFromLog } from "@/lib/sms/outcome";
 import { resolveDelivery } from "@/lib/sms/resolveDelivery";
@@ -48,6 +49,10 @@ export async function POST(request: Request) {
   const sequenceNumber = typeof rawData.sequence_number === "number"
     ? rawData.sequence_number
     : null;
+  // Items raised before the step snapshot existed carry only the position; the
+  // step is then resolved from it below, and stays null if it no longer exists.
+  const rawStepId = typeof rawData.step_id === "string" ? rawData.step_id : null;
+  const rawStepDay = typeof rawData.step_day === "number" ? rawData.step_day : null;
   const reviewBookingId = typeof rawData.booking_id === "string"
     ? rawData.booking_id
     : null;
@@ -65,6 +70,10 @@ export async function POST(request: Request) {
   if (!patient || !settings) {
     return NextResponse.json({ error: "Patient eller inställningar saknas" }, { status: 404 });
   }
+
+  const fallbackStep = resolveSteps(settings)[sequenceNumber - 1];
+  const stepId = rawStepId ?? fallbackStep?.id ?? null;
+  const stepDay = rawStepDay ?? fallbackStep?.day ?? null;
 
   const currentBookingId = latestValidBooking(patient, store.bookings)?.id ?? null;
   if (reviewBookingId !== currentBookingId) {
@@ -107,6 +116,8 @@ export async function POST(request: Request) {
         message,
         status: "dry_run",
         sequence_number: sequenceNumber,
+        step_id: stepId,
+        step_day: stepDay,
         is_cycle_reset: false,
         provider_message_id: null,
         skip_reason: null,
@@ -144,6 +155,8 @@ export async function POST(request: Request) {
       message,
       status: "pending",
       sequence_number: sequenceNumber,
+      step_id: stepId,
+      step_day: stepDay,
       is_cycle_reset: false,
       provider_message_id: null,
       skip_reason: null,
@@ -197,6 +210,8 @@ export async function POST(request: Request) {
         patient_id: patient.id,
         phone,
         sequence_number: sequenceNumber,
+        step_id: stepId,
+        step_day: stepDay,
         rendered_message: message,
         booking_id: reviewBookingId,
       },
@@ -217,6 +232,8 @@ export async function POST(request: Request) {
         patient_id: patient.id,
         phone,
         sequence_number: sequenceNumber,
+        step_id: stepId,
+        step_day: stepDay,
         rendered_message: message,
         booking_id: reviewBookingId,
       },

@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import type { TemplateStep } from "./PatientActions";
+import type { SmsStep } from "@/types/clinic";
 import { useToast } from "./ToastProvider";
 
 interface Props {
   patientId: string;
-  steps: TemplateStep[];
+  steps: SmsStep[];
   onClose: () => void;
   onScheduled: () => void;
 }
@@ -21,7 +21,7 @@ function toLocalMinute(date: Date) {
 
 export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Props) {
   const [scheduledFor, setScheduledFor] = useState("");
-  const [sequenceOverride, setSequenceOverride] = useState<number | null>(null);
+  const [stepId, setStepId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const firstRef = useRef<HTMLInputElement>(null);
@@ -54,12 +54,12 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
         setBusy(false);
         return;
       }
-      const body: { patientId: string; scheduledFor: string; timeZone: string; sequenceOverride?: number } = {
+      const body: { patientId: string; scheduledFor: string; timeZone: string; stepId?: string } = {
         patientId,
         scheduledFor: selectedDate.toISOString(),
         timeZone,
       };
-      if (sequenceOverride !== null) body.sequenceOverride = sequenceOverride;
+      if (stepId !== null) body.stepId = stepId;
       const res = await fetch("/api/scheduled-sms", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -181,11 +181,11 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
             {steps.length > 0 && (
               <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                 <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
-                  Mall
+                  Uppföljning
                 </span>
                 <select
-                  value={sequenceOverride ?? ""}
-                  onChange={(e) => setSequenceOverride(e.target.value === "" ? null : Number(e.target.value))}
+                  value={stepId ?? ""}
+                  onChange={(e) => setStepId(e.target.value === "" ? null : e.target.value)}
                   style={{
                     border: "1px solid var(--border)",
                     borderRadius: "var(--radius-sm)",
@@ -199,9 +199,9 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
                   }}
                 >
                   <option value="">Automatisk</option>
-                  {steps.map((s, i) => (
-                    <option key={i + 1} value={i + 1}>
-                      Mall {i + 1} (dag {s.day})
+                  {steps.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.day} dagar{s.active ? "" : " (inaktiv)"}
                     </option>
                   ))}
                 </select>

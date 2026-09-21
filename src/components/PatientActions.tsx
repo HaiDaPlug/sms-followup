@@ -6,10 +6,9 @@ import { ScheduleSmsDialog } from "./ScheduleSmsDialog";
 import { useToast } from "./ToastProvider";
 import { isRealSend } from "@/lib/sms/outcome";
 import { requestSend } from "@/lib/sms/sendClient";
+import type { SmsStep } from "@/types/clinic";
 
 type SendState = "idle" | "sending" | "sent" | "failed";
-
-export type TemplateStep = { day: number; template: string };
 
 const styles = `
 @keyframes pa-spin { to { transform: rotate(360deg); } }
@@ -197,14 +196,14 @@ export function PatientActions({
 }: {
   patientId: string;
   doNotContact?: boolean;
-  steps?: TemplateStep[];
+  steps?: SmsStep[];
 }) {
   const [sendState, setSendState] = useState<SendState>("idle");
   const [sendError, setSendError] = useState<string | null>(null);
   const [dncBusy, setDncBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [isDnc, setIsDnc] = useState(doNotContact);
-  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const toast = useToast();
   const router = useRouter();
@@ -219,7 +218,7 @@ export function PatientActions({
 
     const outcome = await requestSend({
       patientId,
-      sequenceOverride: selectedSeq ?? undefined,
+      stepId: selectedStepId ?? undefined,
     });
     toast.outcome(outcome);
 
@@ -283,14 +282,14 @@ export function PatientActions({
         <select
           className="pa-tpl-select"
           disabled={sendState !== "idle"}
-          value={selectedSeq ?? ""}
-          onChange={(e) => setSelectedSeq(e.target.value === "" ? null : Number(e.target.value))}
-          title="Välj mall"
+          value={selectedStepId ?? ""}
+          onChange={(e) => setSelectedStepId(e.target.value === "" ? null : e.target.value)}
+          title="Välj uppföljning"
         >
           <option value="">Automatisk</option>
-          {steps.map((s, i) => (
-            <option key={i + 1} value={i + 1}>
-              Mall {i + 1} (dag {s.day})
+          {steps.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.day} dagar{s.active ? "" : " (inaktiv)"}
             </option>
           ))}
         </select>

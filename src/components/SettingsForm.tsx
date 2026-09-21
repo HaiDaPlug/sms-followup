@@ -2,8 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import type { ReminderSettings, SmsStep } from "@/types/clinic";
-import { resolveSteps } from "@/lib/reminders/steps";
+import type { ReminderSettings, StoredSmsStep } from "@/types/clinic";
+import { stepsForEditing } from "@/lib/reminders/steps";
 
 const VARIABLES_HINT = "{{firstName}} / {{förnamn}}  {{fullName}}  {{lastBookingDate}}  {{bookingLink}}  {{clinicName}}";
 
@@ -386,7 +386,7 @@ function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
   );
 }
 
-// ── Single SMS step card ──────────────────────────────────────────────────────
+// ── Single follow-up card ─────────────────────────────────────────────────────
 
 function StepCard({
   index,
@@ -396,9 +396,9 @@ function StepCard({
   onRemove,
 }: {
   index: number;
-  step: SmsStep;
+  step: StoredSmsStep;
   total: number;
-  onChange: (s: SmsStep) => void;
+  onChange: (s: StoredSmsStep) => void;
   onRemove: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -421,13 +421,27 @@ function StepCard({
     });
   }
 
+  const active = step.active ?? true;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, opacity: active ? 1 : 0.55 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)" }}>
-          SMS {index + 1} —
+          Uppföljning {index + 1} —
         </span>
         <DayChip value={step.day} onChange={(day) => onChange({ ...step, day })} />
+        <label
+          style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 14, color: "var(--text-muted)", cursor: "pointer" }}
+          title="Inaktiva uppföljningar skickas inte automatiskt, men kan fortfarande väljas manuellt."
+        >
+          <input
+            type="checkbox"
+            checked={active}
+            onChange={(e) => onChange({ ...step, active: e.target.checked })}
+            style={{ width: 14, height: 14, accentColor: "var(--accent)", cursor: "pointer" }}
+          />
+          Aktiv
+        </label>
         {total > 1 && (
           <button
             type="button"
@@ -444,6 +458,10 @@ function StepCard({
             Ta bort
           </button>
         )}
+      </div>
+      <div style={{ fontSize: 14, color: "var(--text-muted)" }}>
+        Skickas {step.day} dagar efter patientens senaste besök
+        {active ? "" : " — pausad"}
       </div>
       <textarea
         ref={textareaRef}
@@ -481,13 +499,15 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
   const [busy, setBusy] = useState(false);
   const [dryRun, setDryRun] = useState(settings.dry_run_mode);
   const [sameNumberOverride, setSameNumberOverride] = useState(settings.allow_same_number_override ?? false);
-  const [steps, setSteps] = useState<SmsStep[]>(() => resolveSteps(settings));
+  // Seeded from the stored steps as-is so ids round-trip untouched; a resolver
+  // fallback id must never be persisted by a save.
+  const [steps, setSteps] = useState<StoredSmsStep[]>(() => stepsForEditing(settings));
   const [clinicName, setClinicName] = useState(settings.clinic_name);
   const [bookingLink, setBookingLink] = useState(settings.booking_link);
   const [sendTime, setSendTime] = useState(settings.send_time);
   const [maxPerDay, setMaxPerDay] = useState(settings.max_per_day);
 
-  function updateStep(i: number, s: SmsStep) {
+  function updateStep(i: number, s: StoredSmsStep) {
     setSteps((prev) => prev.map((x, idx) => (idx === i ? s : x)));
   }
 
@@ -497,7 +517,8 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
 
   function addStep() {
     const lastDay = steps[steps.length - 1]?.day ?? 0;
-    setSteps((prev) => [...prev, { day: lastDay + 30, template: "" }]);
+    // A new step gets its identity here, once, for life.
+    setSteps((prev) => [...prev, { id: crypto.randomUUID(), day: lastDay + 30, template: "", active: true }]);
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -533,7 +554,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
     if (response.ok) {
       const saved = await response.json() as ReminderSettings;
       // Sync all state from the confirmed-saved server response
-      const savedSteps = resolveSteps(saved);
+      const savedSteps = stepsForEditing(saved);
       setSteps(savedSteps);
       setClinicName(saved.clinic_name);
       setBookingLink(saved.booking_link);
@@ -550,8 +571,11 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
       }
       router.refresh();
     } else {
+      // The server explains most rejections (for example a stale tab); show it
+      // instead of a generic failure when it does.
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
       setMessageType("error");
-      setMessage("Kunde inte spara.");
+      setMessage(payload.error ? `Kunde inte spara: ${payload.error}` : "Kunde inte spara.");
     }
   }
 
@@ -603,13 +627,19 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
       {/* ── SMS-mallar ── */}
       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: "none", padding: "24px 28px", display: "grid", gap: 24 }}>
         <SectionHeader
-          title="SMS-mallar"
-          description="Ett meddelande per steg. Klicka på dagen för att ändra när det skickas."
+          title="Automatiska uppföljningar"
+          description="Kontakta automatiskt patienter som inte har återkommit efter en viss tid. Klicka på dagen för att ändra när uppföljningen skickas."
         />
+
+        {steps.length > 0 && steps.every((step) => step.active === false) && (
+          <div className="notice" style={{ fontSize: 14 }}>
+            Inga uppföljningar är aktiva — inget skickas automatiskt.
+          </div>
+        )}
 
         {steps.map((step, i) => (
           <StepCard
-            key={i}
+            key={step.id ?? i}
             index={i}
             step={step}
             total={steps.length}
@@ -624,7 +654,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
           onClick={addStep}
           style={{ alignSelf: "flex-start", fontSize: 14 }}
         >
-          + Lägg till steg
+          + Lägg till uppföljning
         </button>
       </div>
 
@@ -655,7 +685,7 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
         }}>
           <input defaultChecked={settings.is_active} name="is_active" type="checkbox" style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }} />
           <div>
-            <div style={{ fontWeight: 600, fontSize: 16, color: "var(--text)" }}>Aktivera automatiska påminnelser</div>
+            <div style={{ fontWeight: 600, fontSize: 16, color: "var(--text)" }}>Aktivera automatiska uppföljningar</div>
             <div style={{ fontSize: 14, color: "var(--text-muted)", marginTop: 2 }}>Daglig körning sker klockan {sendTime} om detta är aktiverat.</div>
           </div>
         </label>

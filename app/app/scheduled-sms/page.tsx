@@ -1,5 +1,6 @@
 import { listScheduledSms, readStoreForUi } from "@/lib/data/repository";
 import { ScheduledSmsClient, type ScheduledSmsRow } from "@/components/ScheduledSmsClient";
+import { resolveSteps } from "@/lib/reminders/steps";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export default async function ScheduledSmsPage() {
         </div>
       </div>
 
-      <ScheduledSmsClient initialRows={rows} />
+      <ScheduledSmsClient initialRows={rows} steps={resolveSteps(store.reminder_settings[0])} />
     </>
   );
 }

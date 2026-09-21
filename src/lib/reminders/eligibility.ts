@@ -6,13 +6,14 @@ import type {
   PatientReminderStatus,
   ReminderLog,
   ReminderSettings,
-  ReviewItem
+  ReviewItem,
+  SmsStep
 } from "@/types/clinic";
 import { isSentLogStatus } from "@/lib/sms/outcome";
 import { readStore } from "@/lib/data/repository";
 import { readStoreForUi } from "@/lib/data/readStoreForUi";
 import { isFutureBooking } from "@/lib/import/normalizers";
-import { resolveSteps } from "./steps";
+import { resolveSteps, stepById, stepPosition } from "./steps";
 export { resolveSteps } from "./steps";
 
 function daysBetween(date: string) {
@@ -82,97 +83,146 @@ export function logsInCurrentCycle(patientId: string, logs: ReminderLog[]): Remi
 }
 
 /**
- * Returns the next step that should be sent, or null if nothing is due yet / all sent.
- * sequenceNumber is 1-based (1 = first step, 2 = second, etc.).
+ * What the patient's current cycle has already consumed, expressed in the two
+ * terms the engine orders by: which steps were sent (by id) and how far the
+ * sequence has advanced (by day).
+ *
+ * The day of a sent step comes from the log's own `step_day` snapshot FIRST.
+ * Ids preserve identity, the snapshot preserves historical meaning: a message
+ * sent as the 90-day follow-up stays a 90-day fact even if that step is later
+ * re-timed to 180, so it keeps bounding the cycle at 90. Only rows written
+ * before the snapshot existed fall back to the step's current day, then to the
+ * positional `sequence_number`.
+ */
+function cycleProgress(
+  patientId: string,
+  steps: SmsStep[],
+  logs: ReminderLog[]
+): { sentIds: Set<string>; maxSentDay: number } {
+  const sentLogs = logsInCurrentCycle(patientId, logs).filter(
+    (l) => l.status === "sent" || l.status === "dry_run" || l.status === "delivered"
+  );
+
+  const sentIds = new Set<string>();
+  let maxSentDay = -Infinity;
+  for (const log of sentLogs) {
+    if (log.step_id) sentIds.add(log.step_id);
+    const day =
+      log.step_day ??
+      stepById(steps, log.step_id)?.day ??
+      (log.sequence_number ? steps[log.sequence_number - 1]?.day : undefined);
+    if (day !== undefined && day > maxSentDay) maxSentDay = day;
+  }
+  return { sentIds, maxSentDay };
+}
+
+/** The active, unsent steps still ahead of the patient in this cycle. */
+function remainingSteps(
+  patient: Patient,
+  settings: ReminderSettings,
+  logs: ReminderLog[]
+): { steps: SmsStep[]; candidates: SmsStep[]; crossed: SmsStep[]; hasSent: boolean } {
+  const steps = resolveSteps(settings);
+  const { sentIds, maxSentDay } = cycleProgress(patient.id, steps, logs);
+  const days = patient.last_booking_at ? daysBetween(patient.last_booking_at) : -Infinity;
+
+  // Excluded by id as well as by day: a step that was already sent never
+  // qualifies again, even if its trigger day was later edited upward.
+  const candidates = steps.filter(
+    (step) => step.active && !sentIds.has(step.id) && step.day > maxSentDay
+  );
+  return {
+    steps,
+    candidates,
+    crossed: candidates.filter((step) => days >= step.day),
+    hasSent: maxSentDay > -Infinity,
+  };
+}
+
+function toNextSequence(steps: SmsStep[], step: SmsStep): NextSequenceInfo {
+  return {
+    stepId: step.id,
+    day: step.day,
+    // Position in the FULL sorted list, inactive steps included: this is what
+    // sequence_number has always meant and what the 013 indexes key on.
+    sequenceNumber: stepPosition(steps, step.id) ?? 1,
+  };
+}
+
+/**
+ * Returns the next step that should be sent, or null if nothing is due yet /
+ * all sent. Picks the highest crossed threshold, so a patient 212 days out gets
+ * the 180-day follow-up rather than restarting at day 5.
+ *
+ * Inactive steps are skipped, never blocking: with 90 active, 180 inactive and
+ * 365 active, a patient who received the 90 goes on to the 365.
  */
 export function getNextSequence(
   patient: Patient,
   settings: ReminderSettings,
   logs: ReminderLog[],
-  force = false
+  _force = false
 ): NextSequenceInfo {
   if (!patient.last_booking_at) return null;
 
-  const days = daysBetween(patient.last_booking_at);
-  const steps = resolveSteps(settings);
-
-  const cycleLogs = logsInCurrentCycle(patient.id, logs);
-  const sentInCycle = cycleLogs.filter(
-    (l) => l.status === "sent" || l.status === "dry_run" || l.status === "delivered"
-  );
-  const maxSentSeq = sentInCycle.reduce(
-    (max, l) => Math.max(max, l.sequence_number ?? 0),
-    0
-  );
-
-  if (maxSentSeq >= steps.length) return null; // full sequence complete
-
-  // Jump to the highest threshold crossed (and not yet sent).
-  // For cron: only steps where days >= threshold are eligible.
-  // For manual/force: all remaining steps are eligible (skip the "not due yet" gate),
-  // but still pick the highest crossed threshold so a patient 212 days out gets SMS 4,
-  // not SMS 1.
-  const eligible = force
-    ? steps.filter((_s, i) => i >= maxSentSeq)
-    : steps.filter((s, i) => i >= maxSentSeq && days >= s.day);
-
-  // Among eligible, prefer the highest crossed threshold.
-  const crossed = eligible.filter((s) => days >= s.day);
-  if (crossed.length > 0) {
-    const nextStep = crossed[crossed.length - 1];
-    return { sequenceNumber: steps.indexOf(nextStep) + 1, daysThreshold: nextStep.day };
-  }
-
-  // Nothing new has crossed yet. For force/manual: re-send the last sent step so the
-  // operator can test without advancing the sequence (e.g. re-send SMS 4 while still
-  // at 212 days rather than jumping ahead to SMS 5).
-  if (force && maxSentSeq > 0) {
-    const lastStep = steps[maxSentSeq - 1];
-    return { sequenceNumber: maxSentSeq, daysThreshold: lastStep.day };
-  }
-
-  // For force with nothing sent yet and nothing crossed, send step 1.
-  if (force) return { sequenceNumber: 1, daysThreshold: steps[0].day };
-
-  return null;
+  const { steps, crossed } = remainingSteps(patient, settings, logs);
+  if (crossed.length === 0) return null;
+  return toNextSequence(steps, crossed[crossed.length - 1]);
 }
 
 /**
- * Highest sequence step already sent (or dry-run/delivered) in the patient's
- * current cycle. 0 when nothing has been sent yet.
+ * The next step plus the day the patient first became due for it — the daily
+ * queue's sort key. Computed together so the caller resolves eligibility once
+ * per patient instead of twice.
  */
-export function maxSentSequenceInCycle(patientId: string, logs: ReminderLog[]): number {
-  return logsInCurrentCycle(patientId, logs)
-    .filter((log) => log.status === "sent" || log.status === "dry_run" || log.status === "delivered")
-    .reduce((max, log) => Math.max(max, log.sequence_number ?? 0), 0);
+export function evaluateNextStep(
+  patient: Patient,
+  settings: ReminderSettings,
+  logs: ReminderLog[]
+): { next: NextSequenceInfo; firstDueDay: number | null } {
+  if (!patient.last_booking_at) return { next: null, firstDueDay: null };
+
+  const { steps, crossed } = remainingSteps(patient, settings, logs);
+  if (crossed.length === 0) return { next: null, firstDueDay: null };
+  return {
+    next: toNextSequence(steps, crossed[crossed.length - 1]),
+    // The EARLIEST threshold still owed, not the one being sent: it is when this
+    // patient joined the queue, which is what keeps the ordering fair.
+    firstDueDay: crossed[0].day,
+  };
 }
 
 /**
- * Guards an explicit sequence step against being sent out of chronological
- * order. A `sequenceOverride` bypasses getNextSequence() entirely, so without
- * this check nothing stops step 2 being sent after step 3 has already gone out.
+ * Guards an explicit step against being sent out of chronological order. An
+ * explicit `stepId` bypasses getNextSequence() entirely, so without this check
+ * nothing stops the 14-day message going out after the 90-day one.
+ *
+ * Inactive steps pass: deactivating a follow-up stops the automation from
+ * choosing it, but an operator may still send it deliberately.
  *
  * Returns null when the step is acceptable, or a Swedish reason when it is not.
  */
 export function validateSequenceOrder(
   patientId: string,
-  sequenceNumber: number,
+  stepId: string,
   settings: ReminderSettings,
   logs: ReminderLog[]
 ): string | null {
   const steps = resolveSteps(settings);
-  if (!Number.isInteger(sequenceNumber) || sequenceNumber < 1 || sequenceNumber > steps.length) {
-    return `Ogiltigt SMS-steg: ${sequenceNumber}`;
-  }
+  const step = stepById(steps, stepId);
+  if (!step) return "Uppföljningen finns inte längre";
 
-  const maxSent = maxSentSequenceInCycle(patientId, logs);
-  if (maxSent === 0) return null;
-
-  if (sequenceNumber < maxSent) {
-    return `SMS ${sequenceNumber} kan inte skickas — SMS ${maxSent} har redan skickats i den här cykeln`;
+  const { sentIds, maxSentDay } = cycleProgress(patientId, steps, logs);
+  if (sentIds.has(step.id)) {
+    return `${step.day}-dagars uppföljningen har redan skickats i den här cykeln`;
   }
-  if (sequenceNumber === maxSent) {
-    return `SMS ${sequenceNumber} har redan skickats i den här cykeln`;
+  if (maxSentDay === -Infinity) return null;
+
+  if (step.day < maxSentDay) {
+    return `${step.day}-dagars uppföljningen kan inte skickas — ${maxSentDay}-dagars uppföljningen har redan skickats i den här cykeln`;
+  }
+  if (step.day === maxSentDay) {
+    return `${step.day}-dagars uppföljningen har redan skickats i den här cykeln`;
   }
   return null;
 }
@@ -184,18 +234,13 @@ export function getNextSchedulableSequence(
   settings: ReminderSettings,
   logs: ReminderLog[]
 ): NextSequenceInfo {
-  const due = getNextSequence(patient, settings, logs);
-  if (due) return due;
   if (!patient.last_booking_at) return null;
 
-  const steps = resolveSteps(settings);
-  const nextIndex = maxSentSequenceInCycle(patient.id, logs);
-  const nextStep = steps[nextIndex];
-  if (!nextStep) return null;
-  return {
-    sequenceNumber: nextIndex + 1,
-    daysThreshold: nextStep.day
-  };
+  const { steps, candidates } = remainingSteps(patient, settings, logs);
+  if (candidates.length === 0) return null;
+  // The earliest step still owed, whether or not its day has been reached —
+  // scheduling deliberately runs ahead of the cadence.
+  return toNextSequence(steps, candidates[0]);
 }
 
 function calculatePatientReminderStatusFromSlices(
@@ -221,17 +266,16 @@ function calculatePatientReminderStatusFromSlices(
   }
   if (!patient.last_booking_at) return "No valid booking";
 
-  const next = getNextSequence(patient, settings, logs);
+  const { candidates, crossed, hasSent } = remainingSteps(patient, settings, logs);
 
-  if (next === null) {
-    // Check whether it's "waiting" (not yet reached first step) or "all sent"
-    const days = daysBetween(patient.last_booking_at);
-    const firstStepDay = resolveSteps(settings)[0]?.day ?? settings.days_after_booking;
-    if (days < firstStepDay) return "Waiting";
-    return "Sent"; // completed all applicable steps
-  }
+  if (crossed.length > 0) return "Ready";
 
-  return "Ready";
+  // Nothing is due. "Sent" means the automation finished this patient's cycle,
+  // so it requires that something actually went out. With no active follow-ups
+  // at all, an untouched patient is Waiting — reporting them as Sent would
+  // inflate the completed count merely because the clinic disabled everything.
+  if (candidates.length === 0) return hasSent ? "Sent" : "Waiting";
+  return "Waiting";
 }
 
 export function calculatePatientReminderStatus(
