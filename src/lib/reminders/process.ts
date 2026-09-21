@@ -1,4 +1,4 @@
-import type { Booking, ClinicStore, Patient, ReminderLog, ReminderSettings, SkipReason } from "@/types/clinic";
+import type { Booking, ClinicStore, Patient, ReminderLog, ReminderSettings, ScheduledSms, SkipReason } from "@/types/clinic";
 import {
   addReminderLog,
   addReviewItem,
@@ -15,13 +15,15 @@ import {
 } from "@/lib/data/repository";
 import { supabase } from "@/lib/supabase/client";
 import { sendSms } from "@/lib/sms/provider";
+import { resolveDelivery } from "@/lib/sms/resolveDelivery";
 import {
   calculatePatientReminderStatus,
   getNextSequence,
   latestValidBooking,
   renderSmsTemplate,
   resolveSteps,
-  unresolvedPlaceholders
+  unresolvedPlaceholders,
+  validateSequenceOrder
 } from "./eligibility";
 import { isFutureBooking } from "@/lib/import/normalizers";
 
@@ -60,6 +62,49 @@ async function addDuplicateReservationLog(
     skip_reason: "sequence_complete",
     error: "Redan reserverad av parallell förfrågan",
     sent_at: null,
+  });
+}
+
+/**
+ * A scheduled send freezes its booking_id and rendered message at creation
+ * time, which can be months before it fires. Migration 023 cancels pending rows
+ * when a booking RPC resets the cycle, but bookings also arrive through the CSV
+ * import, which does not go through those RPCs — so this is the backstop.
+ *
+ * Deliberately NOT keyed on patient.last_booking_at: that column excludes future
+ * bookings by definition (migration 022), so while the new appointment is still
+ * upcoming it keeps pointing at the PREVIOUS attended visit — exactly the
+ * booking the scheduled row was created against. Comparing the two would call
+ * the row current. The `Future booking` hard block masks that until the
+ * appointment passes, and then the block disappears while last_booking_at stays
+ * stale until the next import, letting the old-cycle message through.
+ *
+ * Instead: any non-cancelled booking created or made after this row was
+ * scheduled means the patient has re-engaged, and the frozen message belongs to
+ * a cycle they have moved on from.
+ */
+function isStaleScheduledSend(
+  scheduled: ScheduledSms,
+  patient: Patient,
+  bookings: Booking[]
+): boolean {
+  const scheduledAt = new Date(scheduled.created_at).getTime();
+  if (Number.isNaN(scheduledAt)) return false;
+
+  return bookings.some((booking) => {
+    if (booking.patient_id !== patient.id) return false;
+    if (booking.cancelled) return false;
+    // The row's own booking is the cycle it belongs to, never evidence against it.
+    if (scheduled.booking_id && booking.id === scheduled.booking_id) return false;
+
+    // A booking is newer either because the record appeared after scheduling
+    // (webhook or import) or because the appointment itself falls after it.
+    // created_at covers the import case, where a visit can be back-dated.
+    const createdAt = new Date(booking.created_at).getTime();
+    if (!Number.isNaN(createdAt) && createdAt > scheduledAt) return true;
+
+    const bookingAt = booking.booking_at ? new Date(booking.booking_at).getTime() : NaN;
+    return !Number.isNaN(bookingAt) && bookingAt > scheduledAt;
   });
 }
 
@@ -179,6 +224,36 @@ export async function sendReminderToPatient(
       sent_at: null
     });
   };
+
+  // An explicit sequenceOverride skips getNextSequence() above, so the ordering
+  // logic never runs for scheduled or manually-picked steps. Without this check
+  // a step behind one already sent in this cycle would be accepted, sent to the
+  // provider, and then blocked only by the unique index — which reports back as
+  // a bare duplicate rather than saying the step was out of order.
+  if (sequenceOverride) {
+    const orderError = validateSequenceOrder(
+      patient.id,
+      sequenceOverride,
+      settings,
+      store.reminder_logs
+    );
+    if (orderError) {
+      return addReminderLog({
+        patient_id: patient.id,
+        booking_id: latest?.id ?? null,
+        phone: patient.normalized_phone,
+        message: "",
+        status: "skipped",
+        sequence_number: sequenceOverride,
+        is_cycle_reset: false,
+        provider_message_id: null,
+        skip_reason: "out_of_order",
+        error: orderError,
+        sent_at: null
+      });
+    }
+  }
+
   const template = templateForSequence(settings, next.sequenceNumber);
   const message = frozenMessage ?? renderSmsTemplate(template, patient, settings);
 
@@ -273,12 +348,17 @@ export async function sendReminderToPatient(
 
   if (scheduledSmsId) await linkScheduledSmsReservation(scheduledSmsId, reservation.id);
   const result = await sendSms({ to: patient.normalized_phone!, message });
-  const deliveryStatus = result.success ? "sent" : result.uncertain ? "unknown" : "failed";
+
+  // Confirm with the provider rather than trusting that an accepted request
+  // means a delivered message. Shared with the failed-SMS retry route so both
+  // paths classify provider behaviour identically.
+  const resolved = await resolveDelivery(result);
+  const deliveryStatus = resolved.status;
   const log = await updateReminderLog(reservation.id, {
     status: deliveryStatus,
     provider_message_id: result.providerMessageId ?? null,
-    error: result.error ?? null,
-    sent_at: result.success ? nowIso() : null,
+    error: resolved.error,
+    sent_at: resolved.succeeded ? nowIso() : null,
   }, "pending");
 
   if (result.uncertain) {
@@ -299,12 +379,15 @@ export async function sendReminderToPatient(
       },
       content_hash: `delivery_unknown:${reservation.id}`,
     });
-  } else if (!result.success) {
+  } else if (deliveryStatus === "failed") {
+    // Covers both a rejected send and one the provider later reported as
+    // undeliverable during verification — result.success is true in that second
+    // case, so this must key off the resolved status, not the send result.
     await addReviewItem({
       type: "failed_sms",
       severity: "high",
       title: `SMS misslyckades — ${patient.full_name}`,
-      description: result.error ?? "Okänt leverantörsfel.",
+      description: resolved.error ?? "Okänt leverantörsfel.",
       suggested_action: "Granska meddelandet nedan, justera vid behov och skicka igen.",
       status: "open",
       raw_data: {
@@ -425,7 +508,11 @@ export async function processDailyReminders() {
     }
   }
 
-  const sent    = results.filter((r) => r.status === "sent").length;
+  // "delivered" counts as sent: verification can confirm delivery before the
+  // log is written, and a confirmed message is the strongest form of sent —
+  // counting only the literal "sent" status would under-report exactly the
+  // sends that went best.
+  const sent    = results.filter((r) => r.status === "sent" || r.status === "delivered").length;
   const dryRun  = results.filter((r) => r.status === "dry_run").length;
   const failed  = results.filter((r) => r.status === "failed").length;
   const skipped = results.filter((r) => r.status === "skipped").length;
@@ -464,6 +551,28 @@ export async function processScheduledSms() {
         const error = "Patienten hittades inte";
         await completeScheduledSms(scheduled.id, "skipped", null, error);
         results.push({ scheduledSmsId: scheduled.id, patientId: scheduled.patient_id, status: "skipped", error });
+        continue;
+      }
+
+      // Refuse before contacting the provider, not after: the frozen message
+      // belongs to a booking cycle the patient has since moved on from.
+      if (isStaleScheduledSend(scheduled, patient, store.bookings)) {
+        const error = "Avbruten: patienten har bokat en ny tid sedan SMS:et schemalades";
+        const log = await addReminderLog({
+          patient_id: patient.id,
+          booking_id: scheduled.booking_id,
+          phone: patient.normalized_phone,
+          message: "",
+          status: "skipped",
+          sequence_number: scheduled.sequence_override,
+          is_cycle_reset: false,
+          provider_message_id: null,
+          skip_reason: "stale_cycle",
+          error,
+          sent_at: null,
+        });
+        await completeScheduledSms(scheduled.id, "skipped", log.id, error);
+        results.push({ scheduledSmsId: scheduled.id, patientId: patient.id, status: "skipped", error });
         continue;
       }
 

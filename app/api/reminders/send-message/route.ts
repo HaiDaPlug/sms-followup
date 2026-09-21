@@ -10,6 +10,8 @@ import {
   latestValidBooking,
 } from "@/lib/reminders/eligibility";
 import { sendSms } from "@/lib/sms/provider";
+import { outcomeFromLog } from "@/lib/sms/outcome";
+import { resolveDelivery } from "@/lib/sms/resolveDelivery";
 import { supabase } from "@/lib/supabase/client";
 import type { ReminderLog } from "@/types/clinic";
 
@@ -125,9 +127,11 @@ export async function POST(request: Request) {
     }
 
     await updateReviewItem(reviewId, { status: "resolved" });
+    const log = dryRunLog as ReminderLog;
     return NextResponse.json({
       status: "dry_run",
-      log: dryRunLog as ReminderLog,
+      outcome: outcomeFromLog(log),
+      log,
     });
   }
 
@@ -168,16 +172,35 @@ export async function POST(request: Request) {
     result = { success: false, error: detail, uncertain: true };
   }
 
-  const deliveryStatus = result.success ? "sent" : result.uncertain ? "unknown" : "failed";
+  // Same verification the cron path uses, so a retry cannot report a delivery
+  // outcome the scheduled sender would have classified differently.
+  const resolved = await resolveDelivery(result);
+  const deliveryStatus = resolved.status;
   const finalLog = await updateReminderLog(reservation.id, {
     status: deliveryStatus,
     provider_message_id: result.providerMessageId ?? null,
-    error: result.error ?? null,
-    sent_at: result.success ? new Date().toISOString() : null,
+    error: resolved.error,
+    sent_at: resolved.succeeded ? new Date().toISOString() : null,
   }, "pending");
 
-  if (result.success) {
+  if (resolved.succeeded) {
     await updateReviewItem(reviewId, { status: "resolved" });
+  } else if (deliveryStatus === "failed") {
+    // This request already originates from an open failed_sms item. Refresh
+    // that item with the latest attempt instead of inserting another open row
+    // on every retry.
+    await updateReviewItem(reviewId, {
+      status: "open",
+      description: resolved.error ?? "Okänt leverantörsfel.",
+      suggested_action: "Granska meddelandet, justera vid behov och skicka igen.",
+      raw_data: {
+        patient_id: patient.id,
+        phone,
+        sequence_number: sequenceNumber,
+        rendered_message: message,
+        booking_id: reviewBookingId,
+      },
+    });
   } else if (result.uncertain) {
     // Provider may have accepted the send — don't resolve the original review
     // item as "failed"; raise a delivery_unknown item so it gets reconciled
@@ -202,7 +225,12 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json(
-    { status: deliveryStatus, error: result.error ?? null, log: finalLog },
-    { status: result.success ? 200 : result.uncertain ? 202 : 502 }
+    {
+      status: deliveryStatus,
+      error: resolved.error,
+      outcome: outcomeFromLog(finalLog),
+      log: finalLog,
+    },
+    { status: resolved.succeeded ? 200 : deliveryStatus === "unknown" ? 202 : 502 }
   );
 }

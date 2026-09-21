@@ -8,6 +8,7 @@ import type {
   ReminderSettings,
   ReviewItem
 } from "@/types/clinic";
+import { isSentLogStatus } from "@/lib/sms/outcome";
 import { readStore } from "@/lib/data/repository";
 import { readStoreForUi } from "@/lib/data/readStoreForUi";
 import { isFutureBooking } from "@/lib/import/normalizers";
@@ -136,6 +137,46 @@ export function getNextSequence(
   return null;
 }
 
+/**
+ * Highest sequence step already sent (or dry-run/delivered) in the patient's
+ * current cycle. 0 when nothing has been sent yet.
+ */
+export function maxSentSequenceInCycle(patientId: string, logs: ReminderLog[]): number {
+  return logsInCurrentCycle(patientId, logs)
+    .filter((log) => log.status === "sent" || log.status === "dry_run" || log.status === "delivered")
+    .reduce((max, log) => Math.max(max, log.sequence_number ?? 0), 0);
+}
+
+/**
+ * Guards an explicit sequence step against being sent out of chronological
+ * order. A `sequenceOverride` bypasses getNextSequence() entirely, so without
+ * this check nothing stops step 2 being sent after step 3 has already gone out.
+ *
+ * Returns null when the step is acceptable, or a Swedish reason when it is not.
+ */
+export function validateSequenceOrder(
+  patientId: string,
+  sequenceNumber: number,
+  settings: ReminderSettings,
+  logs: ReminderLog[]
+): string | null {
+  const steps = resolveSteps(settings);
+  if (!Number.isInteger(sequenceNumber) || sequenceNumber < 1 || sequenceNumber > steps.length) {
+    return `Ogiltigt SMS-steg: ${sequenceNumber}`;
+  }
+
+  const maxSent = maxSentSequenceInCycle(patientId, logs);
+  if (maxSent === 0) return null;
+
+  if (sequenceNumber < maxSent) {
+    return `SMS ${sequenceNumber} kan inte skickas — SMS ${maxSent} har redan skickats i den här cykeln`;
+  }
+  if (sequenceNumber === maxSent) {
+    return `SMS ${sequenceNumber} har redan skickats i den här cykeln`;
+  }
+  return null;
+}
+
 /** Resolve the step a future scheduled send should own without re-sending an
  * already completed step merely because the next threshold has not been met. */
 export function getNextSchedulableSequence(
@@ -148,11 +189,7 @@ export function getNextSchedulableSequence(
   if (!patient.last_booking_at) return null;
 
   const steps = resolveSteps(settings);
-  const maxSentSeq = logsInCurrentCycle(patient.id, logs)
-    .filter((log) => log.status === "sent" || log.status === "dry_run" || log.status === "delivered")
-    .reduce((max, log) => Math.max(max, log.sequence_number ?? 0), 0);
-
-  const nextIndex = maxSentSeq;
+  const nextIndex = maxSentSequenceInCycle(patient.id, logs);
   const nextStep = steps[nextIndex];
   if (!nextStep) return null;
   return {
@@ -341,7 +378,7 @@ export async function calculateDashboardStats(): Promise<DashboardStats> {
     totalPatients: store.patients.length,
     readyForReminder: dryRun.eligible_count,
     smsSentThisMonth: store.reminder_logs.filter(
-      (log) => log.status === "sent" && new Date(log.created_at) >= monthStart
+      (log) => isSentLogStatus(log.status) && new Date(log.created_at) >= monthStart
     ).length,
     needsReviewCount: store.review_items.filter((item) => item.status === "open").length,
     dryRun,

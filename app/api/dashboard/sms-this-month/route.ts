@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { readStore } from "@/lib/data/repository";
+import { isSentLogStatus } from "@/lib/sms/outcome";
 
 export async function GET() {
   const store = await readStore();
@@ -11,7 +12,7 @@ export async function GET() {
   const patientMap = new Map(store.patients.map((p) => [p.id, p]));
 
   const logs = store.reminder_logs
-    .filter((l) => l.status === "sent" && new Date(l.created_at) >= monthStart)
+    .filter((l) => isSentLogStatus(l.status) && new Date(l.created_at) >= monthStart)
     .map((l) => {
       const patient = l.patient_id ? patientMap.get(l.patient_id) : undefined;
       return {

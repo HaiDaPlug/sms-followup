@@ -212,7 +212,7 @@ export async function addReviewItem(
 
 export async function updateReviewItem(
   id: string,
-  patch: Partial<Pick<ReviewItem, "status">>
+  patch: Partial<Pick<ReviewItem, "status" | "description" | "suggested_action" | "raw_data">>
 ): Promise<ReviewItem | null> {
   const { data, error } = await supabase
     .from("review_items")
