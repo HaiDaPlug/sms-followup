@@ -1,53 +1,62 @@
 "use client";
 
-import { useRef, useCallback, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef } from "react";
+import { IconSearch, IconX } from "./ui/icons";
 
-export function PatientSearch({ defaultValue, currentParams }: {
-  defaultValue: string;
-  currentParams: { status?: string; sort?: string };
+/**
+ * Controlled search field for the patients list. Filtering happens in the
+ * browser as you type, so there is no debounce and no request here.
+ * "/" focuses it from anywhere on the page; Escape clears it.
+ */
+export function PatientSearch({ value, onChange }: {
+  value: string;
+  onChange: (value: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const router = useRouter();
-
-  const submit = useCallback((value: string) => {
-    const params = new URLSearchParams();
-    if (currentParams.status && currentParams.status !== "all") params.set("status", currentParams.status);
-    if (currentParams.sort && currentParams.sort !== "oldest") params.set("sort", currentParams.sort);
-    if (value.trim()) params.set("q", value.trim());
-    // Reset to page 1 on new search
-    const qs = params.toString();
-    router.push(`/app/patients${qs ? `?${qs}` : ""}`);
-  }, [router, currentParams]);
-
-  const handleInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => submit(value), 350);
-  }, [submit]);
 
   useEffect(() => {
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   return (
-    <div className="pt-search-wrap">
-      <span className="pt-search-icon">
-        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-          <circle cx="5.5" cy="5.5" r="4" stroke="currentColor" strokeWidth="1.4"/>
-          <path d="M8.5 8.5L11 11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-        </svg>
-      </span>
+    <div className="search" role="search">
+      <span className="search-icon"><IconSearch /></span>
       <input
         ref={inputRef}
         type="search"
         name="q"
-        defaultValue={defaultValue}
+        value={value}
         placeholder="Sök namn, telefon, e-post…"
-        className="pt-search-input"
-        onChange={handleInput}
+        aria-label="Sök kunder"
+        autoComplete="off"
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && value) { e.preventDefault(); onChange(""); }
+        }}
       />
+      <span className="search-trail">
+        {value ? (
+          <button
+            type="button"
+            className="icon-btn sm"
+            onClick={() => { onChange(""); inputRef.current?.focus(); }}
+            aria-label="Rensa sökningen"
+          >
+            <IconX size={14} />
+          </button>
+        ) : (
+          <kbd title="Tryck / för att söka">/</kbd>
+        )}
+      </span>
     </div>
   );
 }

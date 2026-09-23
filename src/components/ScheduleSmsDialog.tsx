@@ -1,12 +1,17 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import type { SmsStep } from "@/types/clinic";
+import { useState } from "react";
+import type { StepOption } from "@/types/clinic";
 import { useToast } from "./ToastProvider";
+import { Modal } from "./ui/Modal";
+import { IconAlert } from "./ui/icons";
 
 interface Props {
+  /** Defaults to true for callers that mount the dialog only while open. */
+  open?: boolean;
   patientId: string;
-  steps: SmsStep[];
+  patientName?: string;
+  steps: StepOption[];
   onClose: () => void;
   onScheduled: () => void;
 }
@@ -19,23 +24,27 @@ function toLocalMinute(date: Date) {
     + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Props) {
+/** Quick picks: tomorrow / in three days / next Monday, all at 09:00 local. */
+function presets(): { label: string; value: string }[] {
+  const at9 = (d: Date) => { const x = new Date(d); x.setHours(9, 0, 0, 0); return x; };
+  const now = new Date();
+  const tomorrow = at9(new Date(now.getTime() + 86_400_000));
+  const inThree = at9(new Date(now.getTime() + 3 * 86_400_000));
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + ((8 - now.getDay()) % 7 || 7));
+  return [
+    { label: "I morgon 09:00", value: toLocalMinute(tomorrow) },
+    { label: "Om 3 dagar", value: toLocalMinute(inThree) },
+    { label: "Måndag 09:00", value: toLocalMinute(at9(monday)) },
+  ];
+}
+
+export function ScheduleSmsDialog({ open = true, patientId, patientName, steps, onClose, onScheduled }: Props) {
   const [scheduledFor, setScheduledFor] = useState("");
   const [stepId, setStepId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const firstRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
-
-  useEffect(() => {
-    setTimeout(() => firstRef.current?.focus(), 60);
-  }, []);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -97,137 +106,77 @@ export function ScheduleSmsDialog({ patientId, steps, onClose, onScheduled }: Pr
   }
 
   return (
-    <div
-      onClick={() => !busy && onClose()}
-      style={{
-        position: "fixed", inset: 0,
-        background: "rgba(4,20,15,0.55)",
-        zIndex: 1000,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 24,
-      }}
+    <Modal
+      open={open}
+      onClose={onClose}
+      dismissible={!busy}
+      size="sm"
+      title="Schemalägg SMS"
+      description={patientName ? <>Till <strong style={{ color: "var(--text)" }}>{patientName}</strong></> : undefined}
+      padded
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="schedule-sms-title"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-lg)",
-          width: "100%",
-          maxWidth: 420,
-          overflow: "hidden",
-          boxShadow: "0 24px 64px rgba(4,20,15,0.18)",
-        }}
-      >
-        {/* Header */}
-        <div style={{
-          background: "#073B2C",
-          padding: "18px 24px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}>
-          <span id="schedule-sms-title" style={{ fontWeight: 700, fontSize: 19, color: "#fff", letterSpacing: "-0.01em" }}>
-            Schemalägg SMS
-          </span>
-          <button
-            onClick={onClose}
-            disabled={busy}
-            style={{
-              background: "rgba(255,255,255,0.12)",
-              border: "1px solid rgba(255,255,255,0.18)",
-              borderRadius: 6,
-              color: "rgba(255,255,255,0.8)",
-              fontSize: 19,
-              lineHeight: 1,
-              padding: "3px 8px",
-              cursor: "pointer",
-              minHeight: "unset",
-            }}
-          >×</button>
+      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 18 }}>
+        <div className="field">
+          <label className="field-label" htmlFor="schedule-at">
+            Datum och tid <span className="muted" style={{ fontWeight: 400 }}>(Europe/Stockholm)</span>
+            <span className="req">*</span>
+          </label>
+          <input
+            id="schedule-at"
+            type="datetime-local"
+            required
+            value={scheduledFor}
+            onChange={(e) => setScheduledFor(e.target.value)}
+            min={toLocalMinute(new Date(Date.now() + 60_000))}
+          />
+          <div className="row wrap" style={{ gap: 6, marginTop: 2 }}>
+            {presets().map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                className="secondary sm"
+                aria-pressed={scheduledFor === p.value}
+                style={scheduledFor === p.value ? { borderColor: "var(--accent)", background: "var(--accent-bg)", color: "var(--forest)" } : undefined}
+                onClick={() => setScheduledFor(p.value)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} style={{ padding: "24px" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
-                Datum och tid (Europe/Stockholm)<span style={{ color: "var(--red)", marginLeft: 2 }}>*</span>
-              </span>
-              <input
-                ref={firstRef}
-                type="datetime-local"
-                required
-                value={scheduledFor}
-                onChange={(e) => setScheduledFor(e.target.value)}
-                min={toLocalMinute(new Date(Date.now() + 60_000))}
-                style={{
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  background: "var(--surface-sub)",
-                  color: "var(--text)",
-                  fontSize: 14,
-                  padding: "8px 11px",
-                  outline: "none",
-                  width: "100%",
-                  boxSizing: "border-box",
-                }}
-              />
-            </label>
-
-            {steps.length > 0 && (
-              <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
-                  Uppföljning
-                </span>
-                <select
-                  value={stepId ?? ""}
-                  onChange={(e) => setStepId(e.target.value === "" ? null : e.target.value)}
-                  style={{
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius-sm)",
-                    background: "var(--surface-sub)",
-                    color: "var(--text)",
-                    fontSize: 14,
-                    padding: "8px 11px",
-                    outline: "none",
-                    width: "100%",
-                    boxSizing: "border-box",
-                  }}
-                >
-                  <option value="">Automatisk</option>
-                  {steps.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.day} dagar{s.active ? "" : " (inaktiv)"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-          </div>
-
-          {error && (
-            <p style={{ marginTop: 12, fontSize: 14, color: "var(--red)" }}>{error}</p>
-          )}
-
-          <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
-            <button
-              type="button"
-              className="secondary"
-              onClick={onClose}
-              disabled={busy}
+        {steps.length > 0 && (
+          <div className="field">
+            <label className="field-label" htmlFor="schedule-step">Uppföljning</label>
+            <select
+              id="schedule-step"
+              value={stepId ?? ""}
+              onChange={(e) => setStepId(e.target.value === "" ? null : e.target.value)}
             >
-              Avbryt
-            </button>
-            <button type="submit" disabled={busy}>
-              {busy ? "Schemalägger…" : "Schemalägg"}
-            </button>
+              <option value="">Automatisk (nästa steg)</option>
+              {steps.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.day} dagar{s.active ? "" : " (inaktiv)"}
+                </option>
+              ))}
+            </select>
           </div>
-        </form>
-      </div>
-    </div>
+        )}
+
+        {error && (
+          <div className="notice error" role="alert"><IconAlert /> <span>{error}</span></div>
+        )}
+
+        <div className="row" style={{ justifyContent: "flex-end", gap: 8, paddingTop: 4 }}>
+          <button type="button" className="secondary" onClick={onClose} disabled={busy}>
+            Avbryt
+          </button>
+          <button type="submit" disabled={busy}>
+            {busy && <span className="spinner" aria-hidden="true" />}
+            {busy ? "Schemalägger…" : "Schemalägg"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

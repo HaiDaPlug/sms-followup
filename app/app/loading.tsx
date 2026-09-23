@@ -1,39 +1,33 @@
+/** Route transition skeleton — the shape every page shares: header, tiles, a panel. */
 export default function AppLoading() {
   return (
-    <div className="route-loading" role="status" aria-live="polite" aria-label="Laddar sidan">
-      <span className="route-loading-sr">Laddar sidan…</span>
+    <div className="page route-loading" role="status" aria-live="polite" aria-label="Laddar sidan">
+      <span className="sr-only">Laddar sidan…</span>
 
       <div className="route-loading-heading" aria-hidden="true">
-        <span className="route-skeleton route-skeleton-kicker" />
-        <span className="route-skeleton route-skeleton-title" />
-        <span className="route-skeleton route-skeleton-subtitle" />
+        <span className="skeleton" style={{ width: 96, height: 10 }} />
+        <span className="skeleton" style={{ width: 220, height: 28, borderRadius: 8 }} />
+        <span className="skeleton" style={{ width: "min(440px, 72%)", height: 12 }} />
       </div>
 
-      <div className="route-loading-metrics" aria-hidden="true">
+      <div className="route-loading-grid" aria-hidden="true">
         {[0, 1, 2, 3].map((item) => (
-          <div className="route-loading-metric" key={item}>
-            <span className="route-skeleton route-skeleton-label" />
-            <span className="route-skeleton route-skeleton-value" />
+          <div className="route-loading-tile" key={item}>
+            <span className="skeleton" style={{ width: "58%", height: 10 }} />
+            <span className="skeleton" style={{ width: 64, height: 34, borderRadius: 8 }} />
           </div>
         ))}
       </div>
 
-      <div className="route-loading-columns" aria-hidden="true">
-        <div className="route-loading-panel">
-          <span className="route-skeleton route-skeleton-panel-title" />
-          {["wide", "medium", "wide", "short", "medium"].map((width, index) => (
-            <div className="route-loading-row" key={`${width}-${index}`}>
-              <span className="route-skeleton route-skeleton-dot" />
-              <span className={`route-skeleton route-skeleton-line ${width}`} />
-              <span className="route-skeleton route-skeleton-chip" />
-            </div>
-          ))}
-        </div>
-        <div className="route-loading-panel route-loading-panel-compact">
-          <span className="route-skeleton route-skeleton-panel-title" />
-          <span className="route-skeleton route-skeleton-block" />
-          <span className="route-skeleton route-skeleton-block short" />
-        </div>
+      <div className="route-loading-panel" aria-hidden="true">
+        <span className="skeleton" style={{ width: 140, height: 12, marginBottom: 18 }} />
+        {["68%", "52%", "74%", "40%", "61%", "47%"].map((width, index) => (
+          <div className="route-loading-row" key={index}>
+            <span className="skeleton" style={{ width: 16, height: 16, borderRadius: 4, flex: "0 0 auto" }} />
+            <span className="skeleton" style={{ width, height: 11 }} />
+            <span className="skeleton" style={{ width: 72, height: 22, marginLeft: "auto" }} />
+          </div>
+        ))}
       </div>
     </div>
   );

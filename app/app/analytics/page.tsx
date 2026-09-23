@@ -1,4 +1,5 @@
 import { AnalyticsChart } from "@/components/AnalyticsChart";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { getAnalyticsData } from "@/lib/analytics/getAnalyticsData";
 
 export const dynamic = "force-dynamic";
@@ -12,13 +13,11 @@ export default async function AnalyticsPage() {
   } = await getAnalyticsData(days);
 
   return (
-    <>
-      <div className="page-head">
-        <div>
-          <h2 className="page-title">Analys</h2>
-          <p className="page-subtitle">Bokningar och SMS-utskick över tid — se om utskicken driver återbesök.</p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Analys"
+        subtitle="Bokningar och SMS-utskick över tid — och om utskicken faktiskt driver återbesök."
+      />
       <AnalyticsChart
         initialSeries={series}
         initialBookings={bookings}
@@ -32,6 +31,6 @@ export default async function AnalyticsPage() {
         initialConversionsOutsideWindow={conversionsOutsideWindow}
         initialLifetime={lifetime}
       />
-    </>
+    </div>
   );
 }

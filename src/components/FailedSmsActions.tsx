@@ -99,45 +99,34 @@ export function FailedSmsActions({ reviewId, patientId, phone, sequenceNumber, i
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 280 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 260 }}>
       <textarea
+        className="input"
+        aria-label="Meddelande att skicka igen"
         value={message}
         onChange={(e) => setMessage(e.target.value)}
         rows={4}
-        style={{
-          fontSize: 14,
-          lineHeight: 1.5,
-          padding: "8px 10px",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-sm)",
-          background: "var(--surface-sub)",
-          color: "var(--text)",
-          resize: "vertical",
-          width: "100%",
-          boxSizing: "border-box",
-        }}
+        style={{ fontSize: "var(--fs-sm)", minHeight: 96 }}
       />
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         <button
+          className="sm"
           onClick={send}
           disabled={busy !== null || !message.trim()}
-          style={{ fontSize: 14, padding: "5px 12px", minHeight: "unset" }}
         >
           {busy === "send" ? "Skickar…" : "Skicka nu"}
         </button>
         <button
-          className="secondary"
+          className="secondary sm"
           onClick={() => resolve("resolved")}
           disabled={busy !== null}
-          style={{ fontSize: 14, padding: "5px 12px", minHeight: "unset" }}
         >
           {busy === "resolve" ? "…" : "Markera löst"}
         </button>
         <button
-          className="danger"
+          className="danger sm"
           onClick={() => resolve("ignored")}
           disabled={busy !== null}
-          style={{ fontSize: 14, padding: "5px 12px", minHeight: "unset" }}
         >
           {busy === "ignore" ? "…" : "Ignorera"}
         </button>

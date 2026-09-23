@@ -1,348 +1,167 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
+import { Modal } from "./ui/Modal";
+import { IconArrowRight, IconMessage } from "./ui/icons";
+import { formatRelative } from "./ui/format";
+import { logStatusMeta } from "./ui/status";
 
 type ActivityLog = {
   id: string;
   full_name: string | null;
   phone: string | null;
   sequence_number: number | null;
+  step_day?: number | null;
   status: string;
   created_at: string;
 };
 
-const statusSv: Record<string, string> = {
-  sent: "Skickat",
-  dry_run: "Testläge",
-  failed: "Misslyckades",
-  skipped: "Hoppades över",
-};
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("sv-SE");
+function initials(name: string | null) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() || "?";
 }
 
-const shimmerStyle = `
-@keyframes shimmer2 {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+/** "Uppföljning 30 d" when the step is known, else the legacy position. */
+function stepLabel(log: ActivityLog): string | null {
+  if (log.step_day != null) return `Uppföljning ${log.step_day} d`;
+  if (log.sequence_number) return `SMS ${log.sequence_number}`;
+  return null;
 }
-`;
 
-function Skeleton({ width = "100%", height = 13 }: { width?: string | number; height?: number }) {
+function FeedRow({ log }: { log: ActivityLog }) {
+  const meta = logStatusMeta(log.status);
+  const step = stepLabel(log);
   return (
     <>
-      <style>{shimmerStyle}</style>
-      <div style={{
-        width, height,
-        borderRadius: 4,
-        background: "linear-gradient(90deg, var(--surface-sub) 25%, var(--border) 50%, var(--surface-sub) 75%)",
-        backgroundSize: "200% 100%",
-        animation: "shimmer2 1.4s ease-in-out infinite",
-      }} />
+      <span className="avatar" aria-hidden="true">{initials(log.full_name)}</span>
+      <div style={{ minWidth: 0 }}>
+        <p className="truncate" style={{ fontWeight: 600, color: "var(--text)", lineHeight: 1.35 }}>
+          {log.full_name ?? log.phone ?? "—"}
+        </p>
+        <p className="list-sub truncate">
+          {step ? <>{step} · </> : null}
+          {formatRelative(log.created_at)}
+        </p>
+      </div>
+      <span className={`badge sm ${meta.chip}`}>{meta.label}</span>
     </>
   );
 }
 
-function SkeletonRows({ count = 5 }: { count?: number }) {
-  return (
-    <div>
-      {Array.from({ length: count }).map((_, i) => (
-        <div key={i} style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 20px",
-          borderBottom: "1px solid var(--border)",
-          gap: 12,
-        }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1 }}>
-            <Skeleton width={`${45 + ((i * 29) % 30)}%`} height={13} />
-            <Skeleton width={`${25 + ((i * 17) % 20)}%`} height={11} />
-          </div>
-          <Skeleton width={52} height={18} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ActivityModal({ onClose }: { onClose: () => void }) {
+function ActivityModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const reduced = useReducedMotion();
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    setLoadError(false);
     fetch("/api/dashboard/activity")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
       .then(setLogs)
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const listVariants = {
-    hidden: {},
-    show: { transition: { staggerChildren: reduced ? 0 : 0.035, delayChildren: 0.04 } },
-  };
-  const rowVariants = {
-    hidden: { opacity: 0, x: reduced ? 0 : -8 },
-    show: { opacity: 1, x: 0, transition: { duration: 0.26, ease: [0, 0, 0.2, 1] as [number,number,number,number] } },
-  };
+  }, [open]);
 
   return (
-    <motion.div
-      onClick={onClose}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: reduced ? 0 : 0.18 }}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.45)",
-        zIndex: 1000,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-      }}
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="All aktivitet"
+      description="Varje SMS-händelse, senaste först."
+      footer={<span className="tnum">{loading ? "Laddar…" : `${logs.length} händelser`}</span>}
     >
-      <motion.div
-        onClick={(e) => e.stopPropagation()}
-        initial={reduced ? { opacity: 0 } : { opacity: 0, y: 20, scale: 0.97 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={reduced ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.98 }}
-        transition={{ duration: reduced ? 0.15 : 0.26, ease: [0, 0, 0.2, 1] }}
-        style={{
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-lg)",
-          width: "100%",
-          maxWidth: 620,
-          maxHeight: "80vh",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          boxShadow: "0 24px 64px rgba(4,20,15,0.18)",
-        }}
-      >
-        {/* Header — sidebar green */}
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "18px 24px",
-          background: "#073B2C",
-          flexShrink: 0,
-        }}>
-          <span style={{
-            fontFamily: "var(--font-head)",
-            fontWeight: 700,
-            fontSize: 19,
-            color: "#fff",
-            letterSpacing: "-0.01em",
-          }}>All aktivitet</span>
-          <motion.button
-            onClick={onClose}
-            whileHover={{ scale: 1.15, opacity: 1 }}
-            whileTap={{ scale: 0.88 }}
-            transition={{ type: "spring", stiffness: 400, damping: 20 }}
-            style={{
-              background: "rgba(255,255,255,0.12)",
-              border: "1px solid rgba(255,255,255,0.18)",
-              borderRadius: 6,
-              cursor: "pointer",
-              fontSize: 19,
-              color: "rgba(255,255,255,0.8)",
-              lineHeight: 1,
-              padding: "3px 8px",
-              opacity: 0.85,
-            }}
-          >×</motion.button>
+      {loading ? (
+        <div aria-hidden="true">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="list-row">
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1 }}>
+                <span className="skeleton" style={{ width: 32, height: 32, flex: "0 0 auto" }} />
+                <div style={{ display: "grid", gap: 6, flex: 1 }}>
+                  <span className="skeleton" style={{ width: `${45 + ((i * 29) % 30)}%`, height: 12 }} />
+                  <span className="skeleton" style={{ width: `${25 + ((i * 17) % 20)}%`, height: 10 }} />
+                </div>
+              </div>
+              <span className="skeleton" style={{ width: 76, height: 22 }} />
+            </div>
+          ))}
         </div>
-
-        {/* Body */}
-        <div style={{ overflowY: "auto", flex: 1 }}>
-          {loading ? (
-            <SkeletonRows count={8} />
-          ) : logs.length === 0 ? (
-            <p style={{ padding: "24px", fontSize: 14, color: "var(--text-muted)" }}>
-              Inga påminnelser skickade ännu.
-            </p>
-          ) : (
-            <motion.div variants={listVariants} initial="hidden" animate="show">
-              {logs.map((log, i) => (
-                <motion.div
-                  key={log.id}
-                  variants={rowVariants}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 16,
-                    padding: "15px 24px",
-                    borderBottom: "1px solid var(--border)",
-                    background: i % 2 === 1 ? "var(--surface-sub)" : "var(--surface)",
-                  }}
-                >
-                  <div>
-                    <p style={{ fontWeight: 600, fontSize: 16, color: "var(--text)", marginBottom: 3 }}>
-                      {log.full_name ?? log.phone ?? "—"}
-                    </p>
-                    <p style={{ fontSize: 14, color: "var(--text-muted)" }}>
-                      {formatDate(log.created_at)}
-                    </p>
-                  </div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-                    {log.sequence_number ? (
-                      <span style={{
-                        fontSize: 14, fontWeight: 700,
-                        color: "var(--text-muted)", letterSpacing: "0.06em",
-                        textTransform: "uppercase",
-                        background: "var(--surface-sub)",
-                        border: "1px solid var(--border)",
-                        borderRadius: 4, padding: "2px 6px",
-                      }}>
-                        SMS {log.sequence_number}
-                      </span>
-                    ) : null}
-                    <span className={`badge ${log.status}`}>
-                      {statusSv[log.status] ?? log.status}
-                    </span>
-                  </div>
-                </motion.div>
-              ))}
-            </motion.div>
-          )}
+      ) : loadError ? (
+        <div className="empty-state">
+          <span className="empty-title">Kunde inte ladda aktiviteten</span>
+          <span>Stäng och försök igen om en stund.</span>
         </div>
-
-        {/* Footer */}
-        <AnimatePresence>
-          {!loading && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.3, delay: 0.15 }}
-              style={{
-                padding: "11px 24px",
-                borderTop: "1px solid var(--border)",
-                fontSize: 14,
-                color: "var(--text-faint)",
-                background: "var(--surface-sub)",
-                flexShrink: 0,
+      ) : logs.length === 0 ? (
+        <div className="empty-state">
+          <span className="empty-icon"><IconMessage /></span>
+          <span className="empty-title">Inga påminnelser skickade ännu</span>
+        </div>
+      ) : (
+        <motion.ul
+          className="feed"
+          initial="hidden"
+          animate="show"
+          variants={{ hidden: {}, show: { transition: { staggerChildren: reduced ? 0 : 0.025 } } }}
+        >
+          {logs.map((log) => (
+            <motion.li
+              key={log.id}
+              style={{ padding: "12px 24px" }}
+              variants={{
+                hidden: { opacity: 0, y: reduced ? 0 : 4 },
+                show: { opacity: 1, y: 0, transition: { duration: 0.22 } },
               }}
             >
-              {logs.length} händelser
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </motion.div>
-    </motion.div>
+              <FeedRow log={log} />
+            </motion.li>
+          ))}
+        </motion.ul>
+      )}
+    </Modal>
   );
 }
 
-export function ActivityPanel({
-  preview,
-  sectionHeaderStyle,
-  sectionLabelStyle,
-}: {
-  preview: {
-    id: string;
-    full_name: string | null;
-    phone: string | null;
-    sequence_number: number | null;
-    status: string;
-    created_at: string;
-  }[];
-  sectionHeaderStyle: React.CSSProperties;
-  sectionLabelStyle: React.CSSProperties;
-}) {
+export function ActivityPanel({ preview }: { preview: ActivityLog[] }) {
   const [modalOpen, setModalOpen] = useState(false);
   const close = useCallback(() => setModalOpen(false), []);
 
   return (
     <>
-      <div style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius)",
-        overflow: "hidden",
-      }}>
-        <div style={{
-          ...sectionHeaderStyle,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}>
-          <span style={sectionLabelStyle}>Senaste aktivitet</span>
-          <motion.button
-            onClick={() => setModalOpen(true)}
-            whileHover={{ opacity: 0.7 }}
-            whileTap={{ scale: 0.96 }}
-            transition={{ duration: 0.12 }}
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              fontSize: 14,
-              fontWeight: 600,
-              letterSpacing: "0.07em",
-              textTransform: "uppercase",
-              color: "var(--text-muted)",
-              padding: 0,
-            }}
-          >
-            Visa alla ↗
-          </motion.button>
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2 className="panel-title">Senaste aktivitet</h2>
+            <p className="panel-sub">De senaste SMS-händelserna</p>
+          </div>
+          <button type="button" className="reset panel-link" onClick={() => setModalOpen(true)}>
+            Visa alla <IconArrowRight size={14} />
+          </button>
         </div>
 
         {preview.length === 0 ? (
-          <p style={{ padding: "16px 20px", fontSize: 14, color: "var(--text-muted)" }}>
-            Inga påminnelser skickade ännu.
-          </p>
+          <div className="empty-state" style={{ padding: "32px 20px" }}>
+            <span className="empty-icon"><IconMessage /></span>
+            <span className="empty-title">Inga påminnelser skickade ännu</span>
+          </div>
         ) : (
-          preview.map((log) => (
-            <div key={log.id} style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              padding: "10px 20px",
-              borderBottom: "1px solid var(--border)",
-            }}>
-              <div>
-                <p style={{ fontWeight: 500, fontSize: 16 }}>
-                  {log.full_name ?? log.phone ?? "—"}
-                </p>
-                <p style={{ fontSize: 14, color: "var(--text-muted)" }}>
-                  {formatDate(log.created_at)}
-                </p>
-              </div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                {log.sequence_number ? (
-                  <span style={{
-                    fontSize: 12, fontWeight: 600,
-                    color: "var(--text-muted)", letterSpacing: "0.04em",
-                  }}>SMS {log.sequence_number}</span>
-                ) : null}
-                <span className={`badge ${log.status}`}>
-                  {statusSv[log.status] ?? log.status}
-                </span>
-              </div>
-            </div>
-          ))
+          <ul className="feed">
+            {preview.map((log) => (
+              <li key={log.id}>
+                <FeedRow log={log} />
+              </li>
+            ))}
+          </ul>
         )}
-      </div>
+      </section>
 
-      <AnimatePresence>
-        {modalOpen && <ActivityModal key="activity-modal" onClose={close} />}
-      </AnimatePresence>
+      <ActivityModal open={modalOpen} onClose={close} />
     </>
   );
 }

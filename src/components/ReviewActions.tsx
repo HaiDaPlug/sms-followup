@@ -17,10 +17,10 @@ export function ReviewActions({ reviewId }: { reviewId: string }) {
 
   return (
     <div className="actions">
-      <button className="secondary" disabled={busy} onClick={() => setStatus("resolved")}>
+      <button className="secondary sm" disabled={busy} onClick={() => setStatus("resolved")}>
         Markera löst
       </button>
-      <button className="danger" disabled={busy} onClick={() => setStatus("ignored")}>
+      <button className="danger sm" disabled={busy} onClick={() => setStatus("ignored")}>
         Ignorera
       </button>
     </div>

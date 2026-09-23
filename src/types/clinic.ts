@@ -97,6 +97,9 @@ export type SmsStep = {
   active: boolean;
 };
 
+/** What a picker needs to offer a step: no template text. */
+export type StepOption = Pick<SmsStep, "id" | "day" | "active">;
+
 export type ReminderSettings = {
   id: string;
   days_after_booking: number;

@@ -1,9 +1,16 @@
 import { readStoreForUi } from "@/lib/data/repository";
-import { SmsHistoryClient, type PatientRow } from "@/components/SmsHistoryClient";
+import { SmsHistoryClient, type PatientRow, type Tab } from "@/components/SmsHistoryClient";
+import { PageHeader } from "@/components/ui/PageHeader";
 
 export const dynamic = "force-dynamic";
 
-export default async function SmsHistoryPage() {
+export default async function SmsHistoryPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
+  const { tab } = await searchParams;
+  const initialTab: Tab = tab === "failed" || tab === "sent" ? tab : "all";
   const store = await readStoreForUi();
   const patientMap = new Map(store.patients.map((p) => [p.id, p]));
 
@@ -55,19 +62,20 @@ export default async function SmsHistoryPage() {
   const totalFailed = rows.reduce((n, r) => n + r.failedCount, 0);
 
   return (
-    <>
-      <div className="page-head">
-        <div>
-          <h2 className="page-title">SMS-historik</h2>
-          <p className="page-subtitle">
-            {rows.length} patienter kontaktade
-            {totalSent > 0 && <> · <span style={{ color: "var(--accent)" }}>{totalSent} skickade</span></>}
-            {totalFailed > 0 && <> · <span style={{ color: "var(--red)" }}>{totalFailed} misslyckade</span></>}
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="SMS-historik"
+        count={`${rows.length} patienter kontaktade`}
+        subtitle={
+          <>
+            Varje utskick per kund. Klicka på ett SMS för att läsa meddelandet.
+            {totalSent > 0 && <> · <strong style={{ color: "var(--accent-ink)" }}>{totalSent} skickade</strong></>}
+            {totalFailed > 0 && <> · <strong style={{ color: "var(--danger)" }}>{totalFailed} misslyckade</strong></>}
+          </>
+        }
+      />
 
-      <SmsHistoryClient initialRows={rows} />
-    </>
+      <SmsHistoryClient initialRows={rows} initialTab={initialTab} />
+    </div>
   );
 }

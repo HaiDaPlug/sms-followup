@@ -45,7 +45,7 @@ export function BookingMatchActions({ reviewId, matchedPatientId, matchedPatient
     }
   }
 
-  if (done) return <span style={{ fontSize: 14, color: "var(--accent)" }}>Bekräftad</span>;
+  if (done) return <span className="chip ok">Bekräftad</span>;
 
   // Candidate buttons: prefer identity_lookups candidates, fall back to legacy matchedPatientId
   const buttons: { id: string; label: string }[] = [];
@@ -64,23 +64,22 @@ export function BookingMatchActions({ reviewId, matchedPatientId, matchedPatient
       {buttons.map((b) => (
         <button
           key={b.id}
+          className="sm"
           disabled={busy}
           onClick={() => confirm(b.id)}
-          style={{ fontSize: 14, padding: "4px 10px", minHeight: "unset" }}
         >
           Bekräfta — {b.label}
         </button>
       ))}
       <button
-        className="secondary"
+        className="secondary sm"
         disabled={busy}
         onClick={() => confirm(null)}
-        style={{ fontSize: 14, padding: "4px 10px", minHeight: "unset" }}
       >
         Skapa ny patient
       </button>
       {error && (
-        <span style={{ fontSize: 12, color: "#c0392b", maxWidth: 240, lineHeight: 1.3 }}>
+        <span style={{ fontSize: 12, color: "var(--danger)", maxWidth: 240, lineHeight: 1.3 }}>
           {error}
         </span>
       )}

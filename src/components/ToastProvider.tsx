@@ -51,10 +51,10 @@ const TONE_BY_KIND: Record<SendOutcomeKind, ToastTone> = {
 };
 
 const TONE_STYLES: Record<ToastTone, { bg: string; border: string; fg: string; icon: string }> = {
-  success: { bg: "var(--accent-bg)", border: "#b8e0dc", fg: "#1d6b63", icon: "✓" },
-  info:    { bg: "var(--blue-bg)",   border: "var(--blue-border)",  fg: "var(--blue)",  icon: "i" },
-  warning: { bg: "var(--amber-bg)",  border: "var(--amber-border)", fg: "var(--amber)", icon: "!" },
-  error:   { bg: "var(--red-bg)",    border: "var(--red-border)",   fg: "var(--red)",   icon: "✕" },
+  success: { bg: "var(--ok-bg)",     border: "var(--ok-border)",     fg: "var(--ok)",     icon: "✓" },
+  info:    { bg: "var(--info-bg)",   border: "var(--info-border)",   fg: "var(--info)",   icon: "i" },
+  warning: { bg: "var(--warn-bg)",   border: "var(--warn-border)",   fg: "var(--warn)",   icon: "!" },
+  error:   { bg: "var(--danger-bg)", border: "var(--danger-border)", fg: "var(--danger)", icon: "✕" },
 };
 
 const AUTO_DISMISS_MS = 5000;
@@ -170,7 +170,7 @@ function ToastViewport({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id:
                 background: style.bg,
                 border: `1px solid ${style.border}`,
                 borderRadius: "var(--radius)",
-                boxShadow: "0 8px 24px rgba(4,20,15,0.12)",
+                boxShadow: "var(--shadow-md)",
               }}
             >
               <span
