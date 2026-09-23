@@ -1,6 +1,6 @@
 # Current State - Clinic Rebooking Reminder System
 
-**Last updated:** 2026-09-09 (session 20 — follow-ups V2: stable step ids, per-step activation, overdue-first daily queue, lifetime analytics. **Code complete on `followups-v2`; migrations 025/026 not yet applied and nothing deployed.**)
+**Last updated:** 2026-09-23 (session 21 — UI/UX overhaul of every page and a fast, client-side patients page, on top of session 20's follow-ups V2. **All on `followups-v2`; migrations 025/026 still unapplied and nothing deployed.** Open decision: `readStore()` loads only the newest 1000 of 4,738 bookings — see session 21.)
 **Phase:** Migrations 001–024 are applied to production, verified by calling each function with real arguments. **025 and 026 exist but are unapplied** — see the session 20 rollout order, which is not the usual "apply then deploy". The BokaDirekt webhook is live on the custom domain `sms.khyte.se`, and on 2026-09-02 the first two webhook bookings arrived, auto-matched deterministically, and logged conversions inside the same transaction. **Conversion tracking is now proven end-to-end** — the gap that had blocked analytics since the project began is closed. Remaining gaps are narrower: no delivery receipt has ever been recorded (`delivered` = 0 across 168 sends), and one `pending_booking_match` review item from 17:09 on 2026-09-02 is still unexamined.
 
 ---
@@ -117,14 +117,14 @@ Similarly, `order=sent_at.desc` sorts NULLs **first** in PostgREST, so ordering 
 
 | Route | Status | Notes |
 |-------|--------|-------|
-| `/app/dashboard` | Working | KPI strip, modals, daily snapshot |
-| `/app/patients` | Working | Card rows, bulk select, status filters (including Delivery pending), manual send |
-| `/app/sms-history` | Working | Per-patient SMS log, pending/unknown delivery states, bulk send, DNC toggle |
-| `/app/import` | Working | CSV upload, idempotent |
-| `/app/review` | Working | Review queue — failed SMS, unknown deliveries, and pending booking matches |
-| `/app/settings` | Working | 5 editable SMS steps, dry-run toggle, emoji picker, char counter |
+| `/app/dashboard` | Redesigned (session 21) | "Redo för påminnelse" hero with next-run volume and run mode, KPI tiles opening their lists, forecast as one stacked bar linking into patient filters, actionable warnings, activity feed |
+| `/app/patients` | Redesigned (session 21) | Status tabs with counts, per-patient follow-up track, split send button, patient drawer with lazy-loaded SMS history, floating bulk send. Filtering, sorting, search and paging run in the browser over all patients; the URL stays in sync |
+| `/app/sms-history` | Working, restyled | Per-patient SMS log, pending/unknown delivery states, bulk send, search, `?tab=failed` deep link |
+| `/app/import` | Working, restyled | CSV upload (drag-and-drop), idempotent |
+| `/app/review` | Working, restyled | Review queue as a card list — failed SMS, unknown deliveries, pending booking matches. Opens on open items; `?visa=alla` shows all |
+| `/app/settings` | Working, restyled | Editable follow-ups with live SMS preview and click-to-insert variables, run-mode switches, sticky save bar |
 | `/app/inbox` | **Retired from nav** (2026-08-12) | Still works if reached by URL; the incoming webhook and the 14 stored messages are untouched. Removed from the sidebar because production sends from the alphanumeric sender ID `OsteopatiC`, which cannot receive replies — so the page no longer represents a working reply loop. Restore the entry in `AppSidebar.tsx` if the sender goes back to a number. Note the incoming webhook still accepts messages sent directly to `FORTYSIX_ELKS_VIRTUAL_NUMBER`, so the page is dormant rather than dead |
-| `/app/analytics` | Working (renders live data) | Daily SMS/bookings chart, four stat tiles incl. conversion rate, bookings table, SMS-matched bookings log, 30/90/180/365-day period selector and a separate 30/60/90-day attribution picker. Booking-arrival rows show clock time (Stockholm) beside the date. Conversion tracking **proven end-to-end 2026-09-02**; figures are real but N is still tiny — see session 19 |
+| `/app/analytics` | Redesigned (session 21), renders live data | Line chart of SMS, bookings and SMS-matched bookings with a data-driven headline (weekly by default from 90 days), four stat tiles incl. conversion rate, lifetime funnel, time-to-rebooking, per-follow-up rates, tabbed bookings / SMS-matched tables with search, 30/90/180/365-day period selector and a separate 30/60/90-day attribution picker. Booking-arrival rows show clock time (Stockholm) beside the date. Conversion tracking **proven end-to-end 2026-09-02**; figures are real but N is still tiny — see session 19 |
 | `/app/scheduled-sms` | Working in code | Management table for scheduled SMS — status, scheduled time, resolved template, cancel action; shows snapshotted name/phone if the patient was later deleted. Delivery via `pg_cron` not yet verified against a live tick |
 
 ---
@@ -156,6 +156,7 @@ Similarly, `order=sent_at.desc` sorts NULLs **first** in PostgREST, so ordering 
 | `POST /api/webhooks/sms-delivery` | Working | 46elks delivery receipts |
 | `POST /api/sms/reply` | Working | Reply via 46elks |
 | `GET /api/sms/inbox` | Working | |
+| `GET /api/logs?patientId=` | Working | One patient's SMS history, newest first — loaded by the patient drawer (session 21) |
 | `DELETE /api/logs/:id` | Working | |
 | `DELETE /api/logs` | Working | |
 
@@ -693,6 +694,59 @@ Worth anticipating rather than treating as a regression when Deploy B lands:
 
 ---
 
+## Session 21 — UI/UX Overhaul and Patients-Page Performance
+
+Branch `followups-v2`, on top of session 20. Pushed to `origin/followups-v2` 2026-09-23; **not merged or deployed** — like the rest of the branch it waits on the session 20 rollout.
+
+| Commit | What it does |
+|---|---|
+| `42e8baa` | Makes the page store cache actually cache, and stops loading booking CSV rows it never uses |
+| `9320a93` | Redesigns every page on one design system; patients page filters in the browser |
+
+### Why
+
+The app worked, but it read as a collection of individually hand-styled screens: six different popup implementations, ~190 inline font sizes, a patients table that overflowed on laptop widths, and an analytics page whose chart colours were silently broken. The ask was to make it world-class in UI, UX and usefulness without losing a feature. Midway through, switching tabs and filters on the patients page was also reported as slow — every click was a full server round trip.
+
+### Where things stand
+
+**Design system.** `app/globals.css` now holds the whole visual language: warm paper neutrals under the forest/mint brand, status chip/tab/panel/table/empty-state primitives, and one button material (a matte, grain-textured finish adapted from `crm-khyte`'s `.btn-grain`). Shared components live in `src/components/ui/` — one accessible `Modal` (dialog and drawer), `Menu`, `ConfirmDialog`, `PageHeader`, icons, formatting and status-label helpers. New UI should build on these rather than add inline styles.
+
+**Pages.** All redesigned; nothing removed. The notable additions in usefulness:
+
+- *Dashboard* leads with a "Redo för påminnelse" hero (next-run volume, paused/test-mode state), turns the daily forecast into one bar over every patient that links into the patient filters, and makes warnings actionable.
+- *Kunder* has status tabs with counts, a per-patient follow-up track (which step was sent, which one the engine will send next — `src/lib/patients/followupTrack.ts`, tested against the engine's own cycle rules), a patient drawer with the full SMS history, and a floating bulk-send bar.
+- *Analys* is a line chart of SMS, bookings and SMS-matched bookings with a data-driven headline, plus a lifetime funnel, time-to-rebooking and per-follow-up rate bars, and tabbed detail tables with search.
+- Sidebar is grouped into Arbete / Utskick / System. **Ctrl+1–8 now follow that order** (Granskning moved to Ctrl+3).
+
+**Performance.** Two causes, both fixed:
+
+- `readStoreForUi` was `unstable_cache(readStore)`, but the snapshot is ~2.3 MB and Next's data cache refuses entries over 2 MB, so it **never cached** — every page read all five tables. It is now an in-process 3 s cache (the window originally intended) and no longer fetches `bookings.raw_data`, about half the bookings payload.
+- The patients page shipped one filtered page per request. It now ships all patients once (~62 KB gzipped for 984) and filters, sorts, searches and pages in the browser, keeping the URL in sync, so switching costs no request. Message history loads when a patient's drawer opens (`GET /api/logs?patientId=`).
+
+**Bugs fixed on the way:** ECharts was given CSS `var()` colours, which a canvas cannot resolve; `.notice.error` did not exist, so errors rendered amber; a Cyrillic "е" in the settings subtitle; and button sheen pseudo-elements escaping `all: unset` buttons and washing out whole panels. Buttons now carry their grain as a background layer, so that class of bug cannot recur.
+
+### Verification
+
+- `npm run typecheck`, `npm test` (**169 across 15 files**), `npm run build` pass.
+- Browser-checked against production data: dashboard, patients (incl. layout measurement at laptop width), analytics chart and tooltip, sidebar. Every check was read-only — no send, schedule, delete or settings save was exercised through the new UI.
+- **Not checked in a browser:** scheduled SMS, SMS history, review and import pages after the redesign, mobile widths, and clicking through the patients page's tabs, search and paging now that they run client-side.
+
+### Behaviour changes to expect
+
+- **Granskning opens on "Öppna"**; resolved and ignored items are under "Alla". Scheduled SMS opens on "Aktiva" when any exist.
+- **Send is disabled for "Kontakta ej" patients** — the server always refused those sends as a hard block, so this only removes a pointless skipped log.
+- **Choosing a follow-up in the send button's ▾ menu sends it immediately** (previously: pick in a dropdown, then press Skicka).
+- **Deleting a patient and clearing all SMS history** use an in-app confirmation instead of the browser's.
+- Settings now opens on Körläge, the most consequential section.
+
+### Found, not fixed — needs a decision
+
+- **Only the newest 1000 of 4,738 bookings are ever loaded** — PostgREST's default row cap, applied by `readStore()` itself. The **sending engine** reads through it too, so a patient whose upcoming appointment was booked long ago could be missed and messaged despite having rebooked. Checked 2026-09-23: all 6 upcoming appointments are currently inside the loaded 1000, so no patient is affected today; the gap widens as bookings accumulate. The fix is to page the reads (as `getAnalyticsData` already does), but it changes what the engine sees, so it was deliberately left for an explicit go-ahead. `readStoreForUi` mirrors the same cap on purpose, so the UI shows the status the engine computes.
+- **"Sändningstid" in settings does nothing.** The daily run is fixed at `0 8 * * *` UTC in `vercel.json` and never reads `send_time`. The dashboard no longer shows a send time for that reason; the settings page still implies one.
+- `src/components/SmsHistoryActions.tsx` is dead code (unused before this session).
+
+---
+
 ## Typography and Type Scale
 
 ### Body font: Inter → Source Sans 3
@@ -707,23 +761,24 @@ Six steps, defined as tokens at the top of `globals.css`. Before this pass the a
 
 | Token | Size | Role |
 |---|---|---|
-| `--fs-xs` | 12px | Field hints, kbd shortcuts, incidental chrome |
-| `--fs-sm` | 14px | Uppercase eyebrows and column headers, secondary/muted text, badges, buttons, nav |
-| `--fs-body` | 16px | Default body, table cells, primary row labels |
-| `--fs-lg` | 19px | Section and panel titles |
+| `--fs-xs` | 12px | Uppercase micro-labels and column headers, counters, hints |
+| `--fs-sm` | 14px | Secondary/muted text, chips, buttons |
+| `--fs-body` | 16px | Default body, table cells, panel titles, sidebar nav |
+| `--fs-lg` | 19px | Section and dialog titles |
 | `--fs-title` | 28px | Page title |
 | `--fs-display` | 40px | Metric values |
+| `--fs-hero` | 56px | The dashboard's single hero figure — one per view, never reused |
 
 **The rule: no in-between sizes.** Anything that needs to be "a bit smaller" goes to the next step down, not to a new value. That discipline is the whole point — the 18-size sprawl came from repeatedly nudging one element by half a pixel.
 
-Two deliberate choices worth not re-litigating:
+Two earlier choices were reversed in session 21, deliberately:
 
-- **Nav sits at `sm` (14), not `body`.** Nav is chrome, not content; at body size it competes with the page for attention, and at 16+ "Schemalagda SMS" wraps to two lines in the 216px sidebar.
-- **Uppercase eyebrows sit at `sm` (14), not `xs`.** They are structure — panel and column headers — and at 12 they read as noise. This is why `--fs-xs` is now a narrow tier used for genuinely incidental text only.
+- **Nav is now at `body` (16), semibold.** At 14/500 and dimmed it read as passive — options rather than destinations. The old objection (wrapping "Schemalagda SMS") no longer applies: the sidebar is 232px and the shortcut hint floats over the item's edge instead of taking width.
+- **Uppercase labels and column headers are now at `xs` (12) with wide tracking.** At 14, bold and uppercase across every panel and table they shouted; at 12 with 0.08–0.14em tracking they read as structure. Headings that carry meaning use serif titles instead.
 
 ### Gotcha for any future type change
 
-**Font sizes are not centralised.** Roughly 190 of them live in inline `style={{ fontSize: n }}` objects across `src/components/*.tsx` **and** `app/**/*.tsx`; `globals.css` holds only about 25. The page files under `app/` are easy to miss — `app/app/dashboard/page.tsx` in particular owns `S.sectionLabel`, the uppercase eyebrow shared by every dashboard panel including Senaste aktivitet. A sweep that covers `src/components` but not `app/` produces exactly the symptom it looks like it fixed: half the dashboard scaled, half not, with adjacent panels visibly disagreeing.
+**Font sizes are mostly centralised now, not entirely.** Session 21 moved the redesigned pages onto classes in `globals.css` that use the `--fs-*` tokens; a remainder of inline `style={{ fontSize: n }}` objects survives in older pieces (e.g. the SMS counter and emoji picker in `SettingsForm.tsx`, the toast host). The page files under `app/` are easy to miss — `app/app/dashboard/page.tsx` in particular owns `S.sectionLabel`, the uppercase eyebrow shared by every dashboard panel including Senaste aktivitet. A sweep that covers `src/components` but not `app/` produces exactly the symptom it looks like it fixed: half the dashboard scaled, half not, with adjacent panels visibly disagreeing.
 
 The `--fs-*` tokens exist so this converges over time; components are still on raw px and can be migrated opportunistically.
 
@@ -745,6 +800,9 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
   - [ ] Apply 026 once no post-deploy row lacks `step_id`
 - [x] ~~**Apply and validate migrations 022–024.**~~ Applied and verified in production 2026-09-02 by direct RPC calls.
 - [x] ~~**Disable optional inline polling for production batches.**~~ `SMS_VERIFY_DELIVERY=off` set in Vercel 2026-09-02.
+- [ ] **Decide on the 1000-booking read cap** (session 21). `readStore()` loads only the newest 1000 of 4,738 bookings, and the sending engine reads through it. Harmless today (all upcoming appointments are inside the window) but it will not stay so. Fix: page the reads the way `getAnalyticsData` does, in both `readStore()` and `readStoreForUi`.
+- [ ] **Browser QA of the session 21 redesign** on the pages not yet checked — scheduled SMS, SMS history, review, import — plus mobile widths and the client-side patients tabs/search/paging.
+- [ ] **"Sändningstid" is not used by the cron** (fixed `0 8 * * *` UTC). Either wire it or remove the field so the settings page stops implying it.
 - [ ] **Investigate why no delivery receipt has ever landed.** `delivered` is 0 across 168 sends while 46elks reports recent messages delivered. Secret and app URL are both verified correct. Send one test SMS and watch whether the row advances within a minute; if not, redeploy to clear any warm function holding the stale URL.
 - [ ] **Examine the open `pending_booking_match` from 17:09 on 2026-09-02** — it predates both successful bookings and has not been looked at.
 - [ ] **Merge `typography-scale` to `main`.** Migration 024 removed the blocking constraint; typecheck and tests pass. `followups-v2` branches from it, so merging that first would carry both.
@@ -804,8 +862,9 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 - `src/lib/analytics/dayKeys.test.ts` — Stockholm day bucketing and window boundaries across both 2026 DST transitions; the UTC-noon anchor producing strictly consecutive days
 - `src/lib/analytics/conversionRate.test.ts` — distinct-patient counting, null vs. 0 %, and the intersection that keeps the rate ≤ 100 %
 - `src/lib/analytics/attributionWindow.test.ts` — exclusive upper bound, untrusted query-param parsing, and the monotonicity property that makes the window safe to change retroactively
+- `src/lib/patients/followupTrack.test.ts` — the patients-page follow-up track reads a cycle the way the engine does: id before day snapshot before position, earlier crossed steps passed over in favour of the latest, dry runs / pending / failures kept distinct from real sends
 
-**160 tests across 14 files.** Provider HTTP is mocked and route/database behavior is simulated; nothing exercises a real database, real 46elks traffic, Vercel runtime limits, or the RLS policies — see the session 16 and session 18 gaps.
+**169 tests across 15 files.** Provider HTTP is mocked and route/database behavior is simulated; nothing exercises a real database, real 46elks traffic, Vercel runtime limits, or the RLS policies — see the session 16 and session 18 gaps.
 
 `src/test/mockSupabase.ts` provides a small reusable chainable Supabase mock for tests that need to assert on `.eq()`/`.update()` call arguments without a live database.
 

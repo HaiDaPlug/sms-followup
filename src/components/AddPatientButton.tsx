@@ -1,32 +1,29 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
+import { Modal } from "./ui/Modal";
+import { IconAlert, IconPlus } from "./ui/icons";
 
-type Field = { label: string; name: string; type?: string; placeholder: string; required?: boolean };
+type Field = { label: string; name: string; type?: string; placeholder: string; required?: boolean; hint?: string };
 
 const FIELDS: Field[] = [
   { label: "Namn", name: "full_name", placeholder: "För- och efternamn", required: true },
-  { label: "Telefon", name: "phone", type: "tel", placeholder: "t.ex. 0701234567" },
+  { label: "Telefon", name: "phone", type: "tel", placeholder: "t.ex. 0701234567", hint: "Krävs för att kunden ska kunna få SMS." },
   { label: "E-post", name: "email", type: "email", placeholder: "namn@exempel.se" },
-  { label: "Senaste bokning", name: "last_booking_at", type: "date", placeholder: "" },
+  { label: "Senaste bokning", name: "last_booking_at", type: "date", placeholder: "", hint: "Uppföljningarna räknas från det här datumet." },
 ];
 
 export function AddPatientButton() {
   const [open, setOpen] = useState(false);
+  const [formKey, setFormKey] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const firstRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (open) setTimeout(() => firstRef.current?.focus(), 60);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  function openDialog() {
+    setError(null);
+    setFormKey((k) => k + 1);
+    setOpen(true);
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -54,111 +51,51 @@ export function AddPatientButton() {
 
   return (
     <>
-      <button onClick={() => setOpen(true)} className="pt-add-btn sweep-btn">
-        <span>+ Lägg till patient</span>
+      <button type="button" onClick={openDialog}>
+        <IconPlus size={14} /> Lägg till patient
       </button>
 
-      {open && (
-        <div
-          onClick={() => setOpen(false)}
-          style={{
-            position: "fixed", inset: 0,
-            background: "rgba(4,20,15,0.55)",
-            zIndex: 1000,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            padding: 24,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--surface)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-lg)",
-              width: "100%",
-              maxWidth: 420,
-              overflow: "hidden",
-              boxShadow: "0 24px 64px rgba(4,20,15,0.18)",
-            }}
-          >
-            {/* Header */}
-            <div style={{
-              background: "#073B2C",
-              padding: "18px 24px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}>
-              <span style={{ fontWeight: 700, fontSize: 19, color: "#fff", letterSpacing: "-0.01em" }}>
-                Lägg till patient
-              </span>
-              <button
-                onClick={() => setOpen(false)}
-                style={{
-                  background: "rgba(255,255,255,0.12)",
-                  border: "1px solid rgba(255,255,255,0.18)",
-                  borderRadius: 6,
-                  color: "rgba(255,255,255,0.8)",
-                  fontSize: 19,
-                  lineHeight: 1,
-                  padding: "3px 8px",
-                  cursor: "pointer",
-                  minHeight: "unset",
-                }}
-              >×</button>
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        dismissible={!busy}
+        size="sm"
+        title="Lägg till patient"
+        description="Kunden läggs till i registret och följs upp enligt inställningarna."
+        padded
+      >
+        <form key={formKey} onSubmit={handleSubmit} style={{ display: "grid", gap: 16 }}>
+          {FIELDS.map((field) => (
+            <div className="field" key={field.name}>
+              <label className="field-label" htmlFor={`add-${field.name}`}>
+                {field.label}
+                {field.required && <span className="req">*</span>}
+              </label>
+              <input
+                id={`add-${field.name}`}
+                name={field.name}
+                type={field.type ?? "text"}
+                placeholder={field.placeholder}
+                required={field.required}
+                autoComplete="off"
+              />
+              {field.hint && <span className="field-hint">{field.hint}</span>}
             </div>
+          ))}
 
-            {/* Form */}
-            <form onSubmit={handleSubmit} style={{ padding: "24px" }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                {FIELDS.map((field, i) => (
-                  <label key={field.name} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
-                      {field.label}{field.required && <span style={{ color: "var(--red)", marginLeft: 2 }}>*</span>}
-                    </span>
-                    <input
-                      ref={i === 0 ? firstRef : undefined}
-                      name={field.name}
-                      type={field.type ?? "text"}
-                      placeholder={field.placeholder}
-                      required={field.required}
-                      style={{
-                        border: "1px solid var(--border)",
-                        borderRadius: "var(--radius-sm)",
-                        background: "var(--surface-sub)",
-                        color: "var(--text)",
-                        fontSize: 14,
-                        padding: "8px 11px",
-                        outline: "none",
-                        width: "100%",
-                        boxSizing: "border-box",
-                      }}
-                    />
-                  </label>
-                ))}
-              </div>
+          {error && <div className="notice error" role="alert"><IconAlert /> <span>{error}</span></div>}
 
-              {error && (
-                <p style={{ marginTop: 12, fontSize: 14, color: "var(--red)" }}>{error}</p>
-              )}
-
-              <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setOpen(false)}
-                  disabled={busy}
-                >
-                  Avbryt
-                </button>
-                <button type="submit" disabled={busy}>
-                  {busy ? "Sparar…" : "Spara patient"}
-                </button>
-              </div>
-            </form>
+          <div className="row" style={{ justifyContent: "flex-end", gap: 8, paddingTop: 4 }}>
+            <button type="button" className="secondary" onClick={() => setOpen(false)} disabled={busy}>
+              Avbryt
+            </button>
+            <button type="submit" disabled={busy}>
+              {busy && <span className="spinner" aria-hidden="true" />}
+              {busy ? "Sparar…" : "Spara patient"}
+            </button>
           </div>
-        </div>
-      )}
+        </form>
+      </Modal>
     </>
   );
 }

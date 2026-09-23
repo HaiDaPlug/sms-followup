@@ -14,6 +14,7 @@ export async function GET() {
         full_name: patient?.full_name ?? null,
         phone: l.phone,
         sequence_number: l.sequence_number,
+        step_day: l.step_day ?? null,
         status: l.status,
         created_at: l.created_at,
       };

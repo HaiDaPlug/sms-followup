@@ -5,7 +5,16 @@ import { useRouter } from "next/navigation";
 import type { ReminderSettings, StoredSmsStep } from "@/types/clinic";
 import { stepsForEditing } from "@/lib/reminders/steps";
 
-const VARIABLES_HINT = "{{firstName}} / {{förnamn}}  {{fullName}}  {{lastBookingDate}}  {{bookingLink}}  {{clinicName}}";
+// Insertable variables, shown as chips under each template. Swedish aliases
+// ({{förnamn}} etc.) keep working in templates; the chips insert the English
+// names the rest of the codebase documents.
+const VARIABLES: { token: string; label: string }[] = [
+  { token: "{{firstName}}", label: "Förnamn" },
+  { token: "{{fullName}}", label: "Fullständigt namn" },
+  { token: "{{lastBookingDate}}", label: "Senaste besök" },
+  { token: "{{bookingLink}}", label: "Bokningslänk" },
+  { token: "{{clinicName}}", label: "Klinikens namn" },
+];
 
 // GSM-7 basic charset. Every character listed here is a single GSM-7 unit
 // except those also in GSM7_EXTENDED, which consume 2 units (escape + char).
@@ -149,13 +158,14 @@ function SmsCounter({ template }: { template: string }) {
   );
 }
 
-function SectionHeader({ title, description }: { title: string; description: string }) {
+function SectionHeader({ title, description, children }: { title: string; description: string; children?: React.ReactNode }) {
   return (
-    <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 18, marginBottom: 6 }}>
-      <div style={{ fontFamily: "var(--font-head)", fontSize: 19, fontWeight: 700, color: "var(--text)", marginBottom: 3 }}>
-        {title}
+    <div className="panel-head" style={{ alignItems: "flex-start" }}>
+      <div>
+        <h2 className="panel-title" style={{ fontSize: "var(--fs-lg)" }}>{title}</h2>
+        <p className="panel-sub">{description}</p>
       </div>
-      <div style={{ fontSize: 14, color: "var(--text-muted)", lineHeight: 1.5 }}>{description}</div>
+      {children}
     </div>
   );
 }
@@ -187,16 +197,15 @@ function DayChip({ value, onChange }: { value: number; onChange: (v: number) => 
   const chipStyle: React.CSSProperties = {
     display: "inline-flex",
     alignItems: "center",
-    gap: 4,
-    fontSize: 14,
+    gap: 6,
+    height: 30,
+    fontSize: "var(--fs-sm)",
     fontWeight: 700,
-    letterSpacing: "0.05em",
-    textTransform: "uppercase",
-    color: "var(--text-muted)",
-    background: "var(--surface-sub)",
-    border: "1px solid var(--border)",
-    borderRadius: 4,
-    padding: "2px 8px",
+    color: "var(--forest)",
+    background: "var(--accent-bg)",
+    border: "1px solid var(--accent-border)",
+    borderRadius: 7,
+    padding: "0 10px",
     cursor: "pointer",
     userSelect: "none",
     whiteSpace: "nowrap",
@@ -204,8 +213,8 @@ function DayChip({ value, onChange }: { value: number; onChange: (v: number) => 
 
   if (editing) {
     return (
-      <span style={{ ...chipStyle, padding: "1px 6px", cursor: "text" }}>
-        dag{" "}
+      <span style={{ ...chipStyle, cursor: "text", background: "var(--surface)", boxShadow: "var(--ring)" }}>
+        Dag{" "}
         <input
           ref={inputRef}
           value={draft}
@@ -214,12 +223,12 @@ function DayChip({ value, onChange }: { value: number; onChange: (v: number) => 
           onKeyDown={onKey}
           type="number"
           min={1}
+          aria-label="Antal dagar efter senaste besök"
           style={{
-            width: 44,
+            width: 52,
             border: "none",
             background: "transparent",
             font: "inherit",
-            fontSize: 12,
             fontWeight: 700,
             color: "var(--text)",
             outline: "none",
@@ -232,9 +241,10 @@ function DayChip({ value, onChange }: { value: number; onChange: (v: number) => 
   }
 
   return (
-    <span style={chipStyle} onClick={startEdit} title="Klicka för att ändra dag">
-      dag {value} ✎
-    </span>
+    <button type="button" className="reset" style={chipStyle} onClick={startEdit} title="Klicka för att ändra dag">
+      Dag {value}
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 2.5l2.5 2.5L6 12.5H3.5V10L11 2.5z" /></svg>
+    </button>
   );
 }
 
@@ -274,17 +284,10 @@ function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
         type="button"
         onClick={() => { setOpen((o) => !o); setSearch(""); }}
         title="Lägg till emoji"
-        style={{
-          background: "none",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-sm)",
-          padding: "3px 8px",
-          fontSize: 19,
-          cursor: "pointer",
-          lineHeight: 1,
-          minHeight: "unset",
-          color: "var(--text-muted)",
-        }}
+        className="icon-btn bordered sm"
+        aria-label="Lägg till emoji"
+        aria-expanded={open}
+        style={{ fontSize: 16, width: 32, height: 30 }}
       >
         😊
       </button>
@@ -403,6 +406,7 @@ function StepCard({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Inserts at the cursor (emoji or a {{variable}}), replacing any selection.
   function insertEmoji(emoji: string) {
     const el = textareaRef.current;
     if (!el) {
@@ -422,69 +426,78 @@ function StepCard({
   }
 
   const active = step.active ?? true;
+  const preview = expandTemplate(step.template);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, opacity: active ? 1 : 0.55 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)" }}>
-          Uppföljning {index + 1} —
-        </span>
+    <div className={`step-card${active ? "" : " is-paused"}`}>
+      <div className="step-card-head">
+        <span className="step-index" aria-hidden="true">{index + 1}</span>
+        <span style={{ fontWeight: 700, color: "var(--text)" }}>Uppföljning {index + 1}</span>
         <DayChip value={step.day} onChange={(day) => onChange({ ...step, day })} />
+        <span className="muted">efter senaste besök{active ? "" : " — pausad"}</span>
         <label
-          style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 14, color: "var(--text-muted)", cursor: "pointer" }}
+          className="row"
+          style={{ gap: 8, marginLeft: "auto", fontSize: "var(--fs-sm)", fontWeight: 600, color: "var(--text-mid)", cursor: "pointer" }}
           title="Inaktiva uppföljningar skickas inte automatiskt, men kan fortfarande väljas manuellt."
         >
-          <input
-            type="checkbox"
-            checked={active}
-            onChange={(e) => onChange({ ...step, active: e.target.checked })}
-            style={{ width: 14, height: 14, accentColor: "var(--accent)", cursor: "pointer" }}
-          />
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={active}
+              onChange={(e) => onChange({ ...step, active: e.target.checked })}
+            />
+            <span className="switch-track" />
+          </span>
           Aktiv
         </label>
         {total > 1 && (
           <button
             type="button"
-            className="secondary"
+            className="icon-btn sm"
             onClick={onRemove}
-            style={{
-              marginLeft: "auto",
-              fontSize: 12,
-              padding: "2px 9px",
-              minHeight: "unset",
-              color: "var(--text-muted)",
-            }}
+            title="Ta bort uppföljningen"
+            aria-label={`Ta bort uppföljning ${index + 1}`}
           >
-            Ta bort
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 4h11M6 4V2.75A.75.75 0 016.75 2h2.5a.75.75 0 01.75.75V4M12.25 4l-.6 8.6a1.5 1.5 0 01-1.5 1.4H5.85a1.5 1.5 0 01-1.5-1.4L3.75 4" /></svg>
           </button>
         )}
       </div>
-      <div style={{ fontSize: 14, color: "var(--text-muted)" }}>
-        Skickas {step.day} dagar efter patientens senaste besök
-        {active ? "" : " — pausad"}
-      </div>
-      <textarea
-        ref={textareaRef}
-        value={step.template}
-        onChange={(e) => onChange({ ...step, template: e.target.value })}
-        style={{ minHeight: 100 }}
-      />
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <EmojiPicker onPick={insertEmoji} />
-        <SmsCounter template={step.template} />
-      </div>
-      <div style={{
-        background: "var(--surface-sub)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-sm)",
-        padding: "7px 11px",
-        fontSize: 14,
-        color: "var(--text-muted)",
-        letterSpacing: "0.02em",
-        fontFamily: "ui-monospace, monospace",
-        lineHeight: 1.8,
-      }}>
-        {VARIABLES_HINT}
+
+      <div className="step-card-body">
+        <div style={{ display: "grid", gap: 8, minWidth: 0, alignContent: "start" }}>
+          <textarea
+            ref={textareaRef}
+            className="input"
+            aria-label={`Meddelande för uppföljning ${index + 1}`}
+            value={step.template}
+            onChange={(e) => onChange({ ...step, template: e.target.value })}
+            style={{ minHeight: 132 }}
+          />
+          <div className="row wrap" style={{ gap: 6 }}>
+            <EmojiPicker onPick={insertEmoji} />
+            {VARIABLES.map((v) => (
+              <button
+                key={v.token}
+                type="button"
+                className="var-chip"
+                onClick={() => insertEmoji(v.token)}
+                title={`Infoga ${v.token}`}
+              >
+                + {v.label}
+              </button>
+            ))}
+          </div>
+          <SmsCounter template={step.template} />
+        </div>
+
+        <div className="step-preview" aria-label="Förhandsvisning">
+          <span className="step-preview-label">Förhandsvisning</span>
+          {preview.trim() ? (
+            <p className="sms-bubble">{preview}</p>
+          ) : (
+            <p className="faint" style={{ fontSize: "var(--fs-sm)" }}>Skriv ett meddelande för att se hur det ser ut.</p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -590,166 +603,143 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
   }
 
   return (
-    <form onSubmit={submit} style={{ display: "grid", gap: 0, maxWidth: 760 }}>
+    <form onSubmit={submit} style={{ display: "grid", gap: 16, maxWidth: 960 }}>
 
-      {/* ── Klinik & timing ── */}
-      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "24px 28px", display: "grid", gap: 20 }}>
-        <SectionHeader
-          title="Klinik & timing"
-          description="Vad kliniken heter, när SMS skickas och hur många per dag."
-        />
-
-        <div className="grid cols-2">
-          <div className="field">
-            <label htmlFor="clinic_name">Klinikens namn</label>
-            <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} id="clinic_name" name="clinic_name" placeholder="Kliniken" />
-          </div>
-          <div className="field">
-            <label htmlFor="booking_link">Bokningslänk</label>
-            <input value={bookingLink} onChange={(e) => setBookingLink(e.target.value)} id="booking_link" name="booking_link" type="url" placeholder="https://..." />
-          </div>
-        </div>
-
-        <div className="grid cols-2">
-          <div className="field">
-            <label htmlFor="send_time">Sändningstid</label>
-            <input value={sendTime} onChange={(e) => setSendTime(e.target.value)} id="send_time" name="send_time" type="time" />
-            <span className="field-hint">Klockslag för det dagliga batch-körningen.</span>
-          </div>
-          <div className="field" style={{ maxWidth: 220 }}>
-            <label htmlFor="max_per_day">Max SMS per dag</label>
-            <input value={maxPerDay} onChange={(e) => setMaxPerDay(Number(e.target.value))} id="max_per_day" min="1" name="max_per_day" type="number" />
-            <span className="field-hint">Tak per körning — skyddar mot oavsiktliga mass-skick.</span>
-          </div>
-        </div>
-      </div>
-
-      {/* ── SMS-mallar ── */}
-      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: "none", padding: "24px 28px", display: "grid", gap: 24 }}>
-        <SectionHeader
-          title="Automatiska uppföljningar"
-          description="Kontakta automatiskt patienter som inte har återkommit efter en viss tid. Klicka på dagen för att ändra när uppföljningen skickas."
-        />
-
-        {steps.length > 0 && steps.every((step) => step.active === false) && (
-          <div className="notice" style={{ fontSize: 14 }}>
-            Inga uppföljningar är aktiva — inget skickas automatiskt.
-          </div>
-        )}
-
-        {steps.map((step, i) => (
-          <StepCard
-            key={step.id ?? i}
-            index={i}
-            step={step}
-            total={steps.length}
-            onChange={(s) => updateStep(i, s)}
-            onRemove={() => removeStep(i)}
-          />
-        ))}
-
-        <button
-          type="button"
-          className="secondary"
-          onClick={addStep}
-          style={{ alignSelf: "flex-start", fontSize: 14 }}
-        >
-          + Lägg till uppföljning
-        </button>
-      </div>
-
-      {/* ── Körläge ── */}
-      <div style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderTop: "none",
-        borderRadius: "0 0 var(--radius) var(--radius)",
-        padding: "24px 28px",
-        display: "grid",
-        gap: 16,
-      }}>
+      {/* ── Körläge ── first: it decides whether anything is sent at all */}
+      <section className="panel rise" style={{ ["--i" as string]: 1 }}>
         <SectionHeader
           title="Körläge"
           description="Styr om automationen är aktiv och om SMS ska skickas på riktigt."
         />
+        <div className="panel-body" style={{ display: "grid", gap: 10 }}>
+          <label className="toggle-row">
+            <span className="switch">
+              <input defaultChecked={settings.is_active} name="is_active" type="checkbox" />
+              <span className="switch-track" />
+            </span>
+            <span>
+              <span className="toggle-title">Aktivera automatiska uppföljningar</span>
+              <span className="toggle-desc">Den dagliga körningen skickar till kunder som är redo — högst {maxPerDay} per dag.</span>
+            </span>
+          </label>
 
-        <label style={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: 12,
-          padding: "14px 16px",
-          borderRadius: "var(--radius-sm)",
-          border: "1px solid var(--border)",
-          cursor: "pointer",
-          background: "var(--surface-sub)",
-        }}>
-          <input defaultChecked={settings.is_active} name="is_active" type="checkbox" style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }} />
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 16, color: "var(--text)" }}>Aktivera automatiska uppföljningar</div>
-            <div style={{ fontSize: 14, color: "var(--text-muted)", marginTop: 2 }}>Daglig körning sker klockan {sendTime} om detta är aktiverat.</div>
+          <label className={`toggle-row${dryRun ? " is-warn" : ""}`}>
+            <span className="switch warn">
+              <input
+                checked={dryRun}
+                name="dry_run_mode"
+                type="checkbox"
+                onChange={(e) => setDryRun(e.target.checked)}
+              />
+              <span className="switch-track" />
+            </span>
+            <span>
+              <span className="toggle-title">{dryRun ? "Testläge aktiverat" : "Testläge avaktiverat"}</span>
+              <span className="toggle-desc">
+                {dryRun
+                  ? "SMS loggas men skickas inte. Avaktivera när du är redo att skicka på riktigt."
+                  : "SMS skickas på riktigt. Aktivera testläget igen om du vill simulera."}
+              </span>
+            </span>
+          </label>
+
+          <label className={`toggle-row${sameNumberOverride ? " is-danger" : ""}`}>
+            <span className="switch danger">
+              <input
+                checked={sameNumberOverride}
+                name="allow_same_number_override"
+                type="checkbox"
+                onChange={(e) => setSameNumberOverride(e.target.checked)}
+              />
+              <span className="switch-track" />
+            </span>
+            <span>
+              <span className="toggle-title">Tillåt test-SMS till samma nummer</span>
+              <span className="toggle-desc">
+                {sameNumberOverride
+                  ? "Dubbel-skyddet är avstängt — SMS skickas även om sekvensen redan slutförts. Bara för testning av eget nummer."
+                  : "Dubbel-skyddet är aktivt. Aktivera för att skicka SMS till ett nummer som redan fått hela sekvensen."}
+              </span>
+            </span>
+          </label>
+        </div>
+      </section>
+
+      {/* ── Automatiska uppföljningar ── */}
+      <section className="panel rise" style={{ ["--i" as string]: 2 }}>
+        <SectionHeader
+          title="Automatiska uppföljningar"
+          description="Kontakta automatiskt patienter som inte har återkommit efter en viss tid. Klicka på dagen för att ändra när uppföljningen skickas."
+        >
+          <span className="tag" title="Aktiva uppföljningar">
+            {steps.filter((step) => step.active !== false).length} av {steps.length} aktiva
+          </span>
+        </SectionHeader>
+
+        <div className="panel-body" style={{ display: "grid", gap: 14 }}>
+          {steps.length > 0 && steps.every((step) => step.active === false) && (
+            <div className="notice">
+              Inga uppföljningar är aktiva — inget skickas automatiskt.
+            </div>
+          )}
+
+          {steps.map((step, i) => (
+            <StepCard
+              key={step.id ?? i}
+              index={i}
+              step={step}
+              total={steps.length}
+              onChange={(s) => updateStep(i, s)}
+              onRemove={() => removeStep(i)}
+            />
+          ))}
+
+          <button type="button" className="reset add-step" onClick={addStep}>
+            + Lägg till uppföljning
+          </button>
+        </div>
+      </section>
+
+      {/* ── Klinik & timing ── */}
+      <section className="panel rise" style={{ ["--i" as string]: 3 }}>
+        <SectionHeader
+          title="Klinik & timing"
+          description="Vad kliniken heter, när SMS skickas och hur många per dag."
+        />
+        <div className="panel-body" style={{ display: "grid", gap: 18 }}>
+          <div className="grid cols-2">
+            <div className="field">
+              <label htmlFor="clinic_name">Klinikens namn</label>
+              <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} id="clinic_name" name="clinic_name" placeholder="Kliniken" />
+              <span className="field-hint">Visas där mallen använder {"{{clinicName}}"}.</span>
+            </div>
+            <div className="field">
+              <label htmlFor="booking_link">Bokningslänk</label>
+              <input value={bookingLink} onChange={(e) => setBookingLink(e.target.value)} id="booking_link" name="booking_link" type="url" placeholder="https://..." />
+              <span className="field-hint">Visas där mallen använder {"{{bookingLink}}"}.</span>
+            </div>
           </div>
-        </label>
 
-        <label style={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: 12,
-          padding: "14px 16px",
-          borderRadius: "var(--radius-sm)",
-          border: dryRun ? "1px solid var(--amber-border)" : "1px solid var(--border)",
-          cursor: "pointer",
-          background: dryRun ? "var(--amber-bg)" : "var(--surface-sub)",
-          transition: "background 200ms, border-color 200ms",
-        }}>
-          <input
-            checked={dryRun}
-            name="dry_run_mode"
-            type="checkbox"
-            onChange={(e) => setDryRun(e.target.checked)}
-            style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }}
-          />
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 16, color: dryRun ? "var(--amber)" : "var(--text)" }}>
-              {dryRun ? "Testläge aktiverat" : "Testläge avaktiverat"}
+          <div className="grid cols-2">
+            <div className="field">
+              <label htmlFor="send_time">Sändningstid</label>
+              <input value={sendTime} onChange={(e) => setSendTime(e.target.value)} id="send_time" name="send_time" type="time" />
+              <span className="field-hint">Klockslag för det dagliga batch-körningen.</span>
             </div>
-            <div style={{ fontSize: 14, color: dryRun ? "var(--amber)" : "var(--text-muted)", opacity: 0.85, marginTop: 2 }}>
-              {dryRun ? "SMS loggas men skickas inte. Avaktivera när du är redo att skicka på riktigt." : "SMS skickas på riktigt. Aktivera testläget igen om du vill simulera."}
+            <div className="field">
+              <label htmlFor="max_per_day">Max SMS per dag</label>
+              <input value={maxPerDay} onChange={(e) => setMaxPerDay(Number(e.target.value))} id="max_per_day" min="1" name="max_per_day" type="number" />
+              <span className="field-hint">Tak per körning — skyddar mot oavsiktliga mass-skick.</span>
             </div>
           </div>
-        </label>
+        </div>
+      </section>
 
-        <label style={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: 12,
-          padding: "14px 16px",
-          borderRadius: "var(--radius-sm)",
-          border: sameNumberOverride ? "1px solid var(--red-border)" : "1px solid var(--border)",
-          cursor: "pointer",
-          background: sameNumberOverride ? "var(--red-bg)" : "var(--surface-sub)",
-          transition: "background 200ms, border-color 200ms",
-        }}>
-          <input
-            checked={sameNumberOverride}
-            name="allow_same_number_override"
-            type="checkbox"
-            onChange={(e) => setSameNumberOverride(e.target.checked)}
-            style={{ marginTop: 2, width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer", flexShrink: 0 }}
-          />
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 16, color: sameNumberOverride ? "var(--red)" : "var(--text)" }}>
-              Tillåt test-SMS till samma nummer
-            </div>
-            <div style={{ fontSize: 14, color: sameNumberOverride ? "var(--red)" : "var(--text-muted)", opacity: 0.85, marginTop: 2 }}>
-              {sameNumberOverride
-                ? "Dubbel-skyddet är avstängt — SMS skickas även om sekvensen redan slutförts. Bara för testning av eget nummer."
-                : "Dubbel-skyddet är aktivt. Aktivera för att skicka SMS till ett nummer som redan fått hela sekvensen."}
-            </div>
-          </div>
-        </label>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 4 }}>
+      {/* ── Save bar — sticks to the bottom so it is reachable from every section ── */}
+      <div className="save-bar">
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
           <button disabled={busy} type="submit">
+            {busy && <span className="spinner" aria-hidden="true" />}
             {busy ? "Sparar…" : "Spara inställningar"}
           </button>
           {dryRun && (
@@ -757,12 +747,12 @@ export function SettingsForm({ settings }: { settings: ReminderSettings }) {
               Skicka test-SMS
             </button>
           )}
-          {message && (
-            <span style={{ fontSize: 14, color: messageType === "ok" ? "var(--accent)" : "var(--red)", fontWeight: 500 }}>
-              {message}
-            </span>
-          )}
         </div>
+        {message && (
+          <span role="status" className={`save-msg ${messageType === "ok" ? "ok" : "error"}`}>
+            {message}
+          </span>
+        )}
       </div>
 
     </form>

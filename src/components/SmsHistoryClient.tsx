@@ -2,41 +2,13 @@
 
 import { useState, useCallback } from "react";
 import { useToast } from "@/components/ToastProvider";
+import { Modal } from "@/components/ui/Modal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { IconMessage, IconSearch, IconSend, IconTrash, IconX } from "@/components/ui/icons";
+import { formatDateTime, formatRelative } from "@/components/ui/format";
+import { logStatusMeta } from "@/components/ui/status";
 import { isRealSend } from "@/lib/sms/outcome";
 import { requestSend } from "@/lib/sms/sendClient";
-
-const statusSv: Record<string, string> = {
-  pending:   "Skickas",
-  unknown:   "Leverans okänd",
-  sent:      "Skickat",
-  delivered: "Levererat",
-  dry_run:   "Testläge",
-  failed:    "Misslyckades",
-  skipped:   "Hoppades över",
-};
-
-function chipColor(status: string): { dot: string; text: string; bg: string; border: string } {
-  if (status === "pending")   return { dot: "#c28a2c", text: "#7a5200", bg: "#fff8e8", border: "#ead9ad" };
-  if (status === "unknown")   return { dot: "#e08040", text: "#8a451d", bg: "#fff3eb", border: "#efd3c2" };
-  if (status === "delivered") return { dot: "#5bbfb5", text: "#1a6b5c", bg: "#edf7f6", border: "#b8e8e5" };
-  if (status === "sent")      return { dot: "#3da89d", text: "#2a7a68", bg: "#edf7f6", border: "#b8e8e5" };
-  if (status === "dry_run")   return { dot: "#4a8ab5", text: "#1a4f78", bg: "#edf3fa", border: "#c8dced" };
-  if (status === "failed")    return { dot: "#c94040", text: "#8b2020", bg: "#fdf0f0", border: "#f0d0d0" };
-  if (status === "skipped")   return { dot: "#8fa8a0", text: "#4a5a56", bg: "#f6f8f7", border: "#e4e9e7" };
-  return { dot: "#8fa8a0", text: "#4a5a56", bg: "#f6f8f7", border: "#e4e9e7" };
-}
-
-function cardAccent(row: PatientRow): string {
-  if (row.failedCount > 0 && row.sentCount === 0) return "#c94040";
-  if (row.failedCount > 0) return "#e08040";
-  if (row.sentCount > 0)   return "#5bbfb5";
-  return "#c8d4d0";
-}
-
-function formatTs(iso: string | null | undefined) {
-  if (!iso) return "—";
-  return new Intl.DateTimeFormat("sv-SE", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
-}
 
 export type LogRow = {
   id: string;
@@ -61,93 +33,61 @@ export type PatientRow = {
 
 export type Tab = "all" | "failed" | "sent";
 
-// ── Trash icon ────────────────────────────────────────────────────────────────
-function TrashIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M2 3.5h9M5 3.5V2.5a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v1M10.5 3.5l-.7 7a.5.5 0 0 1-.5.5H3.7a.5.5 0 0 1-.5-.5l-.7-7"/>
-    </svg>
-  );
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() || "?";
 }
 
-// ── SMS message popup ─────────────────────────────────────────────────────────
-function SmsPopup({ log, onClose }: { log: LogRow; onClose: () => void }) {
-  const colors = chipColor(log.status);
+function accentFor(row: PatientRow): string {
+  if (row.failedCount > 0 && row.sentCount === 0) return "var(--danger-dot)";
+  if (row.failedCount > 0) return "var(--warn-dot)";
+  if (row.sentCount > 0) return "var(--ok-dot)";
+  return "var(--neutral-dot)";
+}
+
+// ── Message dialog ───────────────────────────────────────────────────────────
+function MessageDialog({ open, log, onClose }: { open: boolean; log: LogRow | null; onClose: () => void }) {
+  const meta = log ? logStatusMeta(log.status) : null;
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed", inset: 0, zIndex: 200,
-        background: "rgba(0,0,0,0.35)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}
+    <Modal
+      open={open && log !== null}
+      onClose={onClose}
+      size="sm"
+      title={log?.sequence_number ? `SMS ${log.sequence_number}` : "SMS"}
+      description={
+        log && meta ? (
+          <span className="row" style={{ gap: 8, marginTop: 6 }}>
+            <span className={`badge sm ${meta.chip}`}>{meta.label}</span>
+            <span className="tnum">{formatDateTime(log.sent_at ?? log.created_at)}</span>
+          </span>
+        ) : undefined
+      }
+      padded
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
-          padding: "24px 28px",
-          maxWidth: 480,
-          width: "90%",
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: colors.dot, flexShrink: 0 }} />
-            <span style={{ fontSize: 14, fontWeight: 700, color: colors.text }}>
-              {log.sequence_number ? `SMS ${log.sequence_number}` : log.status}
-            </span>
-            <span style={{ fontSize: 14, color: "var(--text-faint)" }}>
-              {formatTs(log.sent_at ?? log.created_at)}
-            </span>
-          </div>
-          <button
-            onClick={onClose}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 19, color: "var(--text-muted)", lineHeight: 1, padding: "0 4px" }}
-          >
-            ×
-          </button>
+      {log && (
+        <div style={{ display: "grid", gap: 14 }}>
+          {log.message ? (
+            <p className="sms-bubble">{log.message}</p>
+          ) : (
+            <p className="faint">Inget meddelandeinnehåll</p>
+          )}
+          {log.status === "failed" && log.error && (
+            <div className="notice error"><span><strong>Fel:</strong> {log.error}</span></div>
+          )}
         </div>
-
-        <div style={{
-          background: "var(--surface-sub)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-sm)",
-          padding: "14px 16px",
-          fontSize: 16,
-          color: "var(--text)",
-          lineHeight: 1.65,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-        }}>
-          {log.message || <span style={{ color: "var(--text-faint)" }}>Inget meddelandeinnehåll</span>}
-        </div>
-
-        {log.status === "failed" && log.error && (
-          <div style={{ fontSize: 14, color: "var(--red)", background: "var(--red-bg, #fdf0f0)", border: "1px solid var(--red-border, #f0d0d0)", borderRadius: "var(--radius-sm)", padding: "8px 12px" }}>
-            Fel: {log.error}
-          </div>
-        )}
-      </div>
-    </div>
+      )}
+    </Modal>
   );
 }
 
-// ── Log chip ──────────────────────────────────────────────────────────────────
-function LogChip({ log, onDeleted }: { log: LogRow; onDeleted: () => void }) {
+// ── Log chip ─────────────────────────────────────────────────────────────────
+function LogChip({ log, onOpen, onDeleted }: { log: LogRow; onOpen: () => void; onDeleted: () => void }) {
   const [deleting, setDeleting] = useState(false);
-  const [showPopup, setShowPopup] = useState(false);
-  const colors = chipColor(log.status);
+  const meta = logStatusMeta(log.status);
 
   const label = log.sequence_number
     ? `SMS ${log.sequence_number}${log.status === "delivered" ? " ✓" : log.status === "failed" ? " ✗" : ""}`
-    : (statusSv[log.status] ?? log.status);
+    : meta.label;
 
   async function del() {
     setDeleting(true);
@@ -157,64 +97,50 @@ function LogChip({ log, onDeleted }: { log: LogRow; onDeleted: () => void }) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      {showPopup && <SmsPopup log={log} onClose={() => setShowPopup(false)} />}
-      <div
-        onClick={() => setShowPopup(true)}
-        style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          background: colors.bg, border: `1px solid ${colors.border}`,
-          borderRadius: 20, padding: "3px 8px 3px 6px",
-          maxWidth: "fit-content",
-          cursor: "pointer",
-        }}
-      >
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: colors.dot, flexShrink: 0 }} />
-        <span style={{ fontSize: 14, fontWeight: 600, color: colors.text, whiteSpace: "nowrap" }}>
-          {label}
-        </span>
-        <span style={{ fontSize: 12, color: "#a8bdb8", whiteSpace: "nowrap" }}>
-          {formatTs(log.sent_at ?? log.created_at)}
-        </span>
-        <button
-          onClick={(e) => { e.stopPropagation(); del(); }}
-          disabled={deleting}
-          title="Ta bort"
-          style={{
-            background: "none", border: "none", cursor: "pointer",
-            color: "#c8d4d0", padding: 0, lineHeight: 1, display: "flex",
-            opacity: deleting ? 0.3 : 1, marginLeft: 2,
-          }}
-        >
-          ×
+    <div style={{ display: "grid", gap: 4, opacity: deleting ? 0.4 : 1 }}>
+      <span className={`log-chip badge ${meta.chip}`}>
+        <button type="button" className="reset log-chip-open" onClick={onOpen} title={`${meta.label} — visa meddelandet`}>
+          <span>{label}</span>
+          <span className="log-chip-time tnum">{formatRelative(log.sent_at ?? log.created_at)}</span>
         </button>
-      </div>
+        <button
+          type="button"
+          className="reset log-chip-del"
+          onClick={del}
+          disabled={deleting}
+          title="Ta bort loggpost"
+          aria-label="Ta bort loggpost"
+        >
+          <IconX size={12} />
+        </button>
+      </span>
       {log.status === "failed" && log.error && (
-        <div style={{ fontSize: 12, color: "#8b2020", paddingLeft: 6, lineHeight: 1.4, maxWidth: 320 }}>
+        <span style={{ fontSize: "var(--fs-xs)", color: "var(--danger)", paddingLeft: 8, lineHeight: 1.4, maxWidth: 340 }}>
           {log.error}
-        </div>
+        </span>
       )}
     </div>
   );
 }
 
-// ── Patient card ──────────────────────────────────────────────────────────────
-function PatientCard({
+// ── Patient row ──────────────────────────────────────────────────────────────
+function HistoryRow({
   row,
   selected,
   onToggle,
+  onOpenLog,
   onLogDeleted,
   onPatientCleared,
 }: {
   row: PatientRow;
   selected: boolean;
   onToggle: () => void;
+  onOpenLog: (log: LogRow) => void;
   onLogDeleted: (patientId: string, logId: string) => void;
   onPatientCleared: (patientId: string) => void;
 }) {
   const [clearing, setClearing] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const accent = cardAccent(row);
   const visible = expanded ? row.logs : row.logs.slice(0, 3);
 
   async function clearPatient() {
@@ -225,134 +151,85 @@ function PatientCard({
   }
 
   return (
-    <div style={{
-      background: selected ? "rgba(91,191,181,0.06)" : "var(--surface)",
-      border: selected ? "1px solid rgba(91,191,181,0.4)" : "1px solid var(--border)",
-      borderRadius: "var(--radius)",
-      borderLeft: `3px solid ${accent}`,
-      boxShadow: "0 1px 4px rgba(7,59,44,0.06)",
-      padding: "16px 20px",
-      display: "grid",
-      gridTemplateColumns: "28px 200px 140px 1fr auto",
-      gap: "0 16px",
-      alignItems: "start",
-      transition: "box-shadow 150ms, background 120ms, border-color 120ms",
-    }}
-    onMouseEnter={e => (e.currentTarget.style.boxShadow = "0 3px 12px rgba(7,59,44,0.1)")}
-    onMouseLeave={e => (e.currentTarget.style.boxShadow = "0 1px 4px rgba(7,59,44,0.06)")}
-    >
-      {/* Checkbox col */}
-      <div style={{ paddingTop: 2 }}>
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggle}
-          style={{ width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer" }}
-        />
-      </div>
+    <li className={`hist-row${selected ? " is-selected" : ""}`} style={{ ["--accent-line" as string]: accentFor(row) }}>
+      <input
+        type="checkbox"
+        className="cb"
+        checked={selected}
+        onChange={onToggle}
+        aria-label={`Markera ${row.name}`}
+        style={{ marginTop: 10 }}
+      />
 
-      {/* Name col */}
-      <div>
-        <div style={{ fontWeight: 700, fontSize: 16, color: "var(--text)", lineHeight: 1.3 }}>
-          {row.name}
-        </div>
-        <div style={{ fontSize: 14, color: "var(--text-faint)", marginTop: 2 }}>
-          {row.phone ?? "—"}
-        </div>
-        <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
-          {row.doNotContact && (
-            <span className="badge ignored" style={{ fontSize: 12 }}>Kontakta ej</span>
-          )}
-          {row.sentCount > 0 && (
-            <span style={{ fontSize: 12, fontWeight: 700, color: "#2a7a68", letterSpacing: "0.02em" }}>
-              {row.sentCount} skicka{row.sentCount !== 1 ? "de" : "t"}
-            </span>
-          )}
-          {row.failedCount > 0 && (
-            <span style={{ fontSize: 12, fontWeight: 700, color: "#8b2020", letterSpacing: "0.02em" }}>
-              {row.failedCount} misslyckade
-            </span>
-          )}
+      <div className="row" style={{ gap: 12, alignItems: "flex-start", minWidth: 0 }}>
+        <span className="avatar" aria-hidden="true">{initials(row.name)}</span>
+        <div style={{ minWidth: 0 }}>
+          <p className="list-title truncate">{row.name}</p>
+          <p className="list-sub tnum">{row.phone ?? "—"}</p>
+          <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
+            {row.doNotContact && <span className="chip sm blocked">Kontakta ej</span>}
+            {row.sentCount > 0 && (
+              <span className="tag" style={{ color: "var(--ok)" }}>
+                {row.sentCount} skicka{row.sentCount !== 1 ? "de" : "t"}
+              </span>
+            )}
+            {row.failedCount > 0 && (
+              <span className="tag" style={{ color: "var(--danger)" }}>{row.failedCount} misslyckade</span>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Date col */}
-      <div style={{ fontSize: 14, color: "var(--text-muted)", paddingTop: 2 }}>
-        {formatTs(row.lastActivity)}
+      <div className="muted" style={{ paddingTop: 4 }}>
+        <span className="tnum" title={formatDateTime(row.lastActivity)}>{formatRelative(row.lastActivity)}</span>
       </div>
 
-      {/* History col */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
         {visible.map((log) => (
           <LogChip
             key={log.id}
             log={log}
+            onOpen={() => onOpenLog(log)}
             onDeleted={() => onLogDeleted(row.patientId, log.id)}
           />
         ))}
         {row.logs.length > 3 && (
-          <button
-            type="button"
-            onClick={() => setExpanded(v => !v)}
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: 14, color: "var(--accent)", padding: 0,
-              textAlign: "left", fontWeight: 700, width: "fit-content",
-            }}
-          >
-            {expanded ? "Visa färre ↑" : `+${row.logs.length - 3} till`}
+          <button type="button" className="reset panel-link" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Visa färre" : `+${row.logs.length - 3} till`}
           </button>
         )}
       </div>
 
-      {/* Actions col */}
-      <div style={{ paddingTop: 1 }}>
-        <button
-          onClick={clearPatient}
-          disabled={clearing}
-          title="Rensa historik för denna patient"
-          style={{
-            background: "none",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-sm)",
-            color: "var(--text-faint)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 5,
-            fontSize: 14,
-            padding: "5px 9px",
-            opacity: clearing ? 0.4 : 1,
-            transition: "border-color 140ms, color 140ms",
-          }}
-          onMouseEnter={e => {
-            (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--red-border)";
-            (e.currentTarget as HTMLButtonElement).style.color = "var(--red)";
-          }}
-          onMouseLeave={e => {
-            (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--border)";
-            (e.currentTarget as HTMLButtonElement).style.color = "var(--text-faint)";
-          }}
-        >
-          <TrashIcon />
-          {clearing ? "…" : "Rensa"}
-        </button>
-      </div>
-    </div>
+      <button
+        type="button"
+        className="icon-btn bordered"
+        onClick={clearPatient}
+        disabled={clearing}
+        title="Rensa historik för denna patient"
+        aria-label={`Rensa historik för ${row.name}`}
+      >
+        {clearing ? <span className="spinner" aria-hidden="true" /> : <IconTrash size={14} />}
+      </button>
+    </li>
   );
 }
 
 type BulkState = "idle" | "sending" | "done";
 
-// ── Main ──────────────────────────────────────────────────────────────────────
-export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] }) {
+// ── Main ─────────────────────────────────────────────────────────────────────
+export function SmsHistoryClient({ initialRows, initialTab = "all" }: { initialRows: PatientRow[]; initialTab?: Tab }) {
   const [rows, setRows] = useState(initialRows);
-  const [tab, setTab] = useState<Tab>("all");
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const [query, setQuery] = useState("");
   const [clearingAll, setClearingAll] = useState(false);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkState, setBulkState] = useState<BulkState>("idle");
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0 });
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+  // The last opened message stays set while its dialog animates closed.
+  const [openLog, setOpenLog] = useState<LogRow | null>(null);
+  const [messageOpen, setMessageOpen] = useState(false);
   const toast = useToast();
 
   function recount(logs: LogRow[]) {
@@ -424,7 +301,6 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
   }
 
   async function clearAll() {
-    if (!confirm("Är du säker? All SMS-historik raderas permanent.")) return;
     setClearingAll(true);
     const res = await fetch("/api/logs", {
       method: "DELETE",
@@ -433,164 +309,142 @@ export function SmsHistoryClient({ initialRows }: { initialRows: PatientRow[] })
     });
     if (res.ok) setRows([]);
     setClearingAll(false);
+    setConfirmClearAll(false);
   }
 
   const totalAll    = rows.length;
   const totalFailed = rows.filter(r => r.failedCount > 0).length;
   const totalSent   = rows.filter(r => r.sentCount > 0).length;
 
+  const q = query.trim().toLowerCase();
   const filtered = rows.filter(r => {
-    if (tab === "failed") return r.failedCount > 0;
-    if (tab === "sent")   return r.sentCount > 0;
+    if (tab === "failed" && r.failedCount === 0) return false;
+    if (tab === "sent" && r.sentCount === 0) return false;
+    if (q && !r.name.toLowerCase().includes(q) && !(r.phone ?? "").toLowerCase().includes(q)) return false;
     return true;
   });
 
-  const someSelected = selected.size > 0;
+  const showBulkBar = selected.size > 0 || bulkState !== "idle";
+  const pct = bulkProgress.total > 0 ? Math.round((bulkProgress.done / bulkProgress.total) * 100) : 0;
+
+  const tabs: [Tab, string, number, string][] = [
+    ["all",    "Alla",        totalAll,    "var(--neutral-dot)"],
+    ["failed", "Misslyckade", totalFailed, "var(--danger-dot)"],
+    ["sent",   "Skickade",    totalSent,   "var(--ok-dot)"],
+  ];
 
   return (
     <>
-      {/* Bulk action bar */}
-      {someSelected && (
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "10px 16px",
-          background: "#073B2C",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
-          marginBottom: 12,
-          animation: "slideDown 0.18s ease",
-        }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.9)", flex: 1, whiteSpace: "nowrap" }}>
-            {selected.size} {selected.size === 1 ? "vald" : "valda"}
-          </span>
-          {bulkState === "sending" && (
-            <span style={{ fontSize: 14, color: "rgba(255,255,255,0.7)", fontVariantNumeric: "tabular-nums" }}>
-              Skickar {bulkProgress.done}/{bulkProgress.total}…
-            </span>
-          )}
-          {bulkState === "done" && bulkMsg && (
-            <span style={{ fontSize: 14, color: "rgba(255,255,255,0.7)" }}>{bulkMsg}</span>
-          )}
-          <button
-            onClick={sendToSelected}
-            disabled={bulkState !== "idle"}
-            style={{
-              background: "#5bbfb5", color: "#fff", border: "none",
-              borderRadius: 5, padding: "6px 14px", fontSize: 14,
-              fontWeight: 600, cursor: bulkState !== "idle" ? "default" : "pointer",
-              whiteSpace: "nowrap", opacity: bulkState !== "idle" ? 0.5 : 1,
-            }}
-          >
-            {bulkState === "sending"
-              ? `Skickar ${bulkProgress.done}/${bulkProgress.total}…`
-              : "Skicka SMS till valda"}
-          </button>
-          <button
-            onClick={clearSelection}
-            style={{
-              background: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.8)",
-              border: "1px solid rgba(255,255,255,0.2)", borderRadius: 5,
-              padding: "6px 12px", fontSize: 14, fontWeight: 500,
-              cursor: "pointer", whiteSpace: "nowrap",
-            }}
-          >
-            Avmarkera
-          </button>
-        </div>
-      )}
-
-      {/* Controls bar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
-
-        {/* Segmented tabs */}
-        <div style={{
-          display: "inline-flex",
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
-          padding: 3,
-          gap: 2,
-        }}>
-          {([
-            ["all",    `Alla`,         totalAll,    "var(--text)"],
-            ["failed", `Misslyckade`,  totalFailed, "var(--red)"],
-            ["sent",   `Skickade`,     totalSent,   "var(--accent)"],
-          ] as [Tab, string, number, string][]).map(([t, label, count, countColor]) => (
+      <div className="panel rise" style={{ ["--i" as string]: 1 }}>
+        <div className="tabs" style={{ padding: "0 12px" }} role="tablist" aria-label="Filtrera SMS-historik">
+          {tabs.map(([t, label, count, dot]) => (
             <button
               key={t}
               type="button"
+              role="tab"
+              aria-selected={tab === t}
+              className={`tab${tab === t ? " active" : ""}${count === 0 && tab !== t ? " is-empty" : ""}`}
               onClick={() => setTab(t)}
-              style={{
-                background: tab === t ? "var(--surface-sub)" : "transparent",
-                border: tab === t ? "1px solid var(--border)" : "1px solid transparent",
-                borderRadius: "var(--radius-sm)",
-                color: tab === t ? "var(--text)" : "var(--text-muted)",
-                cursor: "pointer",
-                fontSize: 14,
-                fontWeight: tab === t ? 600 : 500,
-                padding: "5px 14px",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                transition: "all 120ms",
-                minHeight: "unset",
-              }}
             >
+              {t !== "all" && <span className="tab-dot" style={{ background: dot }} />}
               {label}
-              <span style={{
-                fontSize: 12,
-                fontWeight: 700,
-                color: tab === t ? countColor : "var(--text-faint)",
-                background: tab === t ? "transparent" : "none",
-                minWidth: 16,
-                textAlign: "center",
-              }}>
-                {count}
-              </span>
+              <span className="tab-count">{count}</span>
             </button>
           ))}
         </div>
 
-        {/* Clear all — outlined danger */}
-        <button
-          className="danger"
-          onClick={clearAll}
-          disabled={clearingAll || rows.length === 0}
-          style={{ fontSize: 14, padding: "5px 14px", minHeight: "unset", display: "flex", alignItems: "center", gap: 6 }}
-        >
-          <TrashIcon />
-          {clearingAll ? "Rensar…" : "Rensa all historik"}
-        </button>
-      </div>
-
-      {/* Card list */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {filtered.map(row => (
-          <PatientCard
-            key={row.patientId}
-            row={row}
-            selected={selected.has(row.patientId)}
-            onToggle={() => toggleOne(row.patientId)}
-            onLogDeleted={handleLogDeleted}
-            onPatientCleared={handlePatientCleared}
-          />
-        ))}
-        {filtered.length === 0 && (
-          <div style={{
-            background: "var(--surface)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            padding: "40px 24px",
-            textAlign: "center",
-            color: "var(--text-muted)",
-            fontSize: 16,
-          }}>
-            Inga poster matchar det valda filtret.
+        <div className="pt-toolbar">
+          <div className="search">
+            <span className="search-icon"><IconSearch /></span>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Sök namn eller telefon…"
+              aria-label="Sök i SMS-historiken"
+            />
+            {query && (
+              <span className="search-trail">
+                <button type="button" className="icon-btn sm" aria-label="Rensa sökningen" onClick={() => setQuery("")}>
+                  <IconX size={14} />
+                </button>
+              </span>
+            )}
           </div>
+          <span className="pt-toolbar-meta">{filtered.length} {filtered.length === 1 ? "kund" : "kunder"}</span>
+          <div className="pt-toolbar-end">
+            <button
+              type="button"
+              className="danger sm"
+              onClick={() => setConfirmClearAll(true)}
+              disabled={clearingAll || rows.length === 0}
+            >
+              <IconTrash size={14} />
+              {clearingAll ? "Rensar…" : "Rensa all historik"}
+            </button>
+          </div>
+        </div>
+
+        {filtered.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-icon"><IconMessage /></span>
+            <span className="empty-title">{rows.length === 0 ? "Ingen SMS-historik ännu" : "Inga poster matchar det valda filtret"}</span>
+            {rows.length > 0 && <span>Prova en annan flik eller sökning.</span>}
+          </div>
+        ) : (
+          <ul className="hist-list">
+            {filtered.map(row => (
+              <HistoryRow
+                key={row.patientId}
+                row={row}
+                selected={selected.has(row.patientId)}
+                onToggle={() => toggleOne(row.patientId)}
+                onOpenLog={(log) => { setOpenLog(log); setMessageOpen(true); }}
+                onLogDeleted={handleLogDeleted}
+                onPatientCleared={handlePatientCleared}
+              />
+            ))}
+          </ul>
         )}
       </div>
+
+      {showBulkBar && (
+        <div className="bulk-bar" role="region" aria-label="Massåtgärder">
+          <span className="bulk-count">
+            {bulkState === "idle"
+              ? `${selected.size} ${selected.size === 1 ? "vald" : "valda"}`
+              : bulkState === "sending"
+                ? `Skickar ${bulkProgress.done}/${bulkProgress.total}`
+                : "Klart"}
+          </span>
+          {bulkState === "sending" && (
+            <span className="bulk-progress" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
+          )}
+          {bulkState === "done" && bulkMsg && <span className="bulk-msg" aria-live="polite">{bulkMsg}</span>}
+          <span className="bulk-sep" aria-hidden="true" />
+          {bulkState !== "done" && (
+            <button type="button" className="accent sm" onClick={sendToSelected} disabled={bulkState !== "idle" || selected.size === 0}>
+              {bulkState === "sending" ? <span className="spinner" aria-hidden="true" /> : <IconSend size={14} />}
+              {bulkState === "sending" ? `Skickar ${bulkProgress.done}/${bulkProgress.total}…` : "Skicka SMS till valda"}
+            </button>
+          )}
+          <button type="button" className="ghost sm" onClick={clearSelection} disabled={bulkState === "sending"}>
+            <IconX size={14} /> {bulkState === "done" ? "Stäng" : "Avmarkera"}
+          </button>
+        </div>
+      )}
+
+      <MessageDialog open={messageOpen} log={openLog} onClose={() => setMessageOpen(false)} />
+
+      <ConfirmDialog
+        open={confirmClearAll}
+        title="Rensa all SMS-historik?"
+        description="All SMS-historik raderas permanent för alla kunder. Detta kan inte ångras."
+        confirmLabel="Rensa allt"
+        busy={clearingAll}
+        onConfirm={clearAll}
+        onClose={() => setConfirmClearAll(false)}
+      />
     </>
   );
 }

@@ -1,6 +1,7 @@
 import { getIncomingSms } from "@/lib/data/repository";
 import { supabase } from "@/lib/supabase/client";
 import { InboxClient } from "@/components/InboxClient";
+import { PageHeader } from "@/components/ui/PageHeader";
 import type { InboxRow } from "@/types/clinic";
 
 export const dynamic = "force-dynamic";
@@ -27,19 +28,13 @@ export default async function InboxPage() {
   const unread = rows.filter((r) => !r.replied_at).length;
 
   return (
-    <>
-      <div className="page-head">
-        <div>
-          <h2 className="page-title">Inkorg</h2>
-          <p className="page-subtitle">
-            Inkommande SMS från patienter på det virtuella numret
-            {unread > 0 && (
-              <> · <span style={{ color: "var(--accent)", fontWeight: 600 }}>{unread} obesvarade</span></>
-            )}
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Inkorg"
+        count={unread > 0 ? `${unread} obesvarade` : undefined}
+        subtitle="Inkommande SMS från patienter på det virtuella numret."
+      />
       <InboxClient initialRows={rows} />
-    </>
+    </div>
   );
 }

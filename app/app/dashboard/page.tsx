@@ -1,189 +1,229 @@
+import Link from "next/link";
 import { calculateDashboardStats } from "@/lib/reminders/eligibility";
-import { formatDate } from "@/lib/patients/status";
+import { getSettings } from "@/lib/data/repository";
 import { KpiStrip } from "@/components/KpiStrip";
 import { ActivityPanel } from "@/components/ActivityPanel";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { IconAlert, IconArrowRight, IconCheck, IconFlask, IconInfo, IconPause, IconPulse } from "@/components/ui/icons";
+import { PATIENT_STATUS } from "@/components/ui/status";
+import { formatNumber } from "@/components/ui/format";
 
 export const dynamic = "force-dynamic";
 
-const dryRunLabels: Record<string, { label: string; sub: string }> = {
-  eligible_count:           { label: "Redo att kontakta",   sub: "patienter" },
-  would_send_today:         { label: "Skickas idag",         sub: "enligt dagsgräns" },
-  excluded_missing_phone:   { label: "Saknar telefon",       sub: "kan ej nås" },
-  excluded_future_booking:  { label: "Har bokat en tid",      sub: "hoppas över" },
-  excluded_do_not_contact:  { label: "Kontakta ej",          sub: "blockerade" },
-  needs_review:             { label: "Granskas",             sub: "inväntar åtgärd" },
-  estimated_sms_count:      { label: "Beräknade SMS",        sub: "nästa körning" },
+const TZ = "Europe/Stockholm";
+
+// Where each nudge can be acted on. Keyed by the nudge title the engine emits;
+// a nudge without an entry simply renders without a link.
+const NUDGE_LINKS: Record<string, { href: string; label: string }> = {
+  "Saknar telefonnummer": { href: "/app/patients?status=Missing%20phone", label: "Visa kunder" },
+  "SMS-fel": { href: "/app/sms-history?tab=failed", label: "Visa misslyckade" },
+  "Har bokat en tid": { href: "/app/patients?status=Future%20booking", label: "Visa kunder" },
 };
 
-const statusSv: Record<string, string> = {
-  sent:      "Skickat",
-  dry_run:   "Testläge",
-  failed:    "Misslyckades",
-  skipped:   "Hoppades över",
-};
+function statusHref(status: string) {
+  return `/app/patients?status=${encodeURIComponent(status)}`;
+}
 
-const S = {
-  sectionHeader: {
-    padding: "12px 20px",
-    borderBottom: "1px solid var(--border)",
-    background: "var(--surface-sub)",
-  } as React.CSSProperties,
-  sectionLabel: {
-    fontSize: 14,
-    fontWeight: 600,
-    letterSpacing: "0.07em",
-    textTransform: "uppercase" as const,
-    color: "var(--text-muted)",
-  } as React.CSSProperties,
-  panel: {
-    background: "var(--surface)",
-    border: "1px solid var(--border)",
-    borderRadius: "var(--radius)",
-    overflow: "hidden",
-  } as React.CSSProperties,
-};
+function share(count: number, total: number) {
+  if (count === 0) return "0 %";
+  const pct = (count / total) * 100;
+  return pct < 1 ? "<1 %" : `${Math.round(pct)} %`;
+}
+
+function greeting(now: Date) {
+  const hour = Number(now.toLocaleString("en-GB", { hour: "2-digit", hour12: false, timeZone: TZ }));
+  if (hour < 10) return "God morgon";
+  if (hour < 17) return "God dag";
+  return "God kväll";
+}
 
 export default async function DashboardPage() {
-  const stats = await calculateDashboardStats();
+  // Settings come from their own one-row query: the store snapshot is already
+  // read inside calculateDashboardStats, and a second full read would double
+  // the dashboard's load time.
+  const [stats, settings] = await Promise.all([calculateDashboardStats(), getSettings()]);
+  const now = new Date();
 
   const highNudges  = stats.nudges.filter((n) => n.severity === "high");
   const otherNudges = stats.nudges.filter((n) => n.severity !== "high");
 
+  // Every patient, split by where they stand before the next run. "Övriga"
+  // is whatever the engine counts as waiting, done or bookingless.
+  const d = stats.dryRun;
+  const accounted =
+    d.eligible_count + d.excluded_future_booking + d.excluded_missing_phone +
+    d.excluded_do_not_contact + d.needs_review;
+  const pool = [
+    { key: "Ready",          label: "Redo att kontakta", sub: "patienter",       count: d.eligible_count,          color: PATIENT_STATUS.Ready.dot },
+    { key: "Future booking", label: "Har bokat en tid",  sub: "hoppas över",     count: d.excluded_future_booking, color: PATIENT_STATUS["Future booking"].dot },
+    { key: "Needs review",   label: "Granskas",          sub: "inväntar åtgärd", count: d.needs_review,            color: PATIENT_STATUS["Needs review"].dot },
+    { key: "Missing phone",  label: "Saknar telefon",    sub: "kan ej nås",      count: d.excluded_missing_phone,  color: PATIENT_STATUS["Missing phone"].dot },
+    { key: "Do not contact", label: "Kontakta ej",       sub: "blockerade",      count: d.excluded_do_not_contact, color: PATIENT_STATUS["Do not contact"].dot },
+    { key: "Waiting",        label: "Väntar eller klara", sub: "ingen uppföljning aktuell", count: Math.max(0, stats.totalPatients - accounted), color: "#cfd5d2" },
+  ];
+  const poolTotal = Math.max(1, stats.totalPatients);
+
   return (
-    <div style={{ maxWidth: 1020 }}>
-
-      {/* ── Header ── */}
-      <div style={{ marginBottom: 32 }}>
-        <p style={{ ...S.sectionLabel, marginBottom: 8 }}>
-          {new Date().toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" })}
-        </p>
-        <h2 className="page-title">Översikt</h2>
-        <p className="page-subtitle">Daglig sammanfattning av påminnelser, prognoser och SMS-aktivitet.</p>
-      </div>
-
-      {/* ── KPI strip — 4 numbers separated by hairlines ── */}
-      <KpiStrip items={[
-        { label: "Kunder totalt",    value: stats.totalPatients },
-        { label: "Redo för påminnelse", value: stats.readyForReminder, clickable: "ready" },
-        { label: "SMS denna månad",     value: stats.smsSentThisMonth, clickable: "sms" },
-        { label: "Inväntar granskning", value: stats.needsReviewCount, clickable: "review" },
-      ]} />
+    <div className="page">
+      <PageHeader
+        eyebrow={now.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long", timeZone: TZ })}
+        title="Översikt"
+        subtitle={`${greeting(now)} — här är läget för påminnelser, prognos och SMS-aktivitet.`}
+        actions={
+          <Link href="/app/settings" className="row" title="Ändra i Inställningar" style={{ gap: 8 }}>
+            {settings?.is_active ? (
+              <span className="chip ok plain"><IconPulse size={14} />Automation på</span>
+            ) : (
+              <span className="chip warn plain"><IconPause size={14} />Automation pausad</span>
+            )}
+            {settings?.dry_run_mode ? (
+              <span className="chip info plain"><IconFlask size={14} />Testläge</span>
+            ) : (
+              <span className="chip sent">Skarpt läge</span>
+            )}
+          </Link>
+        }
+      />
 
       {/* ── High-severity alerts ── */}
       {highNudges.length > 0 && (
-        <div style={{ display: "grid", gap: 8, marginBottom: 20 }}>
-          {highNudges.map((nudge) => (
-            <div key={nudge.title} style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 16,
-              background: "var(--red-bg)",
-              border: "1px solid var(--red-border)",
-              borderRadius: "var(--radius)",
-              padding: "13px 18px",
-            }}>
-              <div>
-                <span style={{ fontWeight: 600, fontSize: 16, color: "var(--red)", marginRight: 10 }}>
-                  {nudge.title}
-                </span>
-                <span style={{ fontSize: 14, color: "var(--red)", opacity: 0.75 }}>{nudge.description}</span>
-              </div>
-              <span style={{
-                ...S.sectionLabel,
-                color: "var(--red)",
-                opacity: 0.6,
-                flexShrink: 0,
-              }}>Åtgärd krävs</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Two-column: Prognos | Varningar + Aktivitet ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-
-        {/* Prognos */}
-        <div style={S.panel}>
-          <div style={S.sectionHeader}>
-            <span style={S.sectionLabel}>Daglig prognos</span>
-          </div>
-          {Object.entries(stats.dryRun).map(([key, value]) => {
-            const meta = dryRunLabels[key];
-            if (!meta) return null;
+        <div style={{ display: "grid", gap: 10, marginBottom: 16 }}>
+          {highNudges.map((nudge, i) => {
+            const link = NUDGE_LINKS[nudge.title];
             return (
-              <div key={key} style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "11px 20px",
-                borderBottom: "1px solid var(--border)",
-              }}>
-                <div>
-                  <span style={{ fontWeight: 500, fontSize: 16, color: "var(--text)" }}>{meta.label}</span>
-                  <span style={{ fontSize: 14, color: "var(--text-muted)", marginLeft: 6 }}>{meta.sub}</span>
+              <div key={nudge.title} className="alert rise" role="alert" style={{ ["--i" as string]: i }}>
+                <span className="alert-icon"><IconAlert /></span>
+                <div style={{ minWidth: 0 }}>
+                  <p className="alert-title">{nudge.title}</p>
+                  <p className="alert-desc">{nudge.description}</p>
                 </div>
-                <span style={{
-                  fontFamily: "var(--font-head)",
-                  fontSize: 19,
-                  fontWeight: 900,
-                  letterSpacing: "-0.02em",
-                  color: value === 0 ? "var(--text-faint)" : "var(--text)",
-                }}>{value}</span>
+                {link ? (
+                  <Link href={link.href} className="button danger sm alert-action">
+                    {link.label} <IconArrowRight size={14} />
+                  </Link>
+                ) : (
+                  <span className="chip danger plain sm alert-action">Åtgärd krävs</span>
+                )}
               </div>
             );
           })}
         </div>
+      )}
 
-        {/* Right column */}
-        <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
+      {/* ── Hero + KPI tiles (client: they open the list dialogs) ── */}
+      <KpiStrip
+        initial={{
+          totalPatients: stats.totalPatients,
+          readyForReminder: stats.readyForReminder,
+          smsSentThisMonth: stats.smsSentThisMonth,
+          needsReviewCount: stats.needsReviewCount,
+          wouldSendToday: d.would_send_today,
+          maxPerDay: settings?.max_per_day ?? d.would_send_today,
+          isActive: settings?.is_active ?? false,
+          dryRun: settings?.dry_run_mode ?? false,
+        }}
+      />
 
-          {/* Varningar */}
-          <div style={S.panel}>
-            <div style={S.sectionHeader}>
-              <span style={S.sectionLabel}>Varningar</span>
+      <div className="grid-12" style={{ alignItems: "start" }}>
+        <div className="span-7 stack">
+        {/* ── Patient pool (the old "Daglig prognos", as one picture) ── */}
+        <section className="panel rise" style={{ ["--i" as string]: 5 }}>
+          <div className="panel-head">
+            <div>
+              <h2 className="panel-title">Daglig prognos</h2>
+              <p className="panel-sub">
+                Var alla {formatNumber(stats.totalPatients)} kunder står inför nästa körning
+                {" · "}{formatNumber(d.estimated_sms_count)} beräknade SMS
+              </p>
+            </div>
+            <Link href="/app/patients" className="panel-link">
+              Alla kunder <IconArrowRight size={14} />
+            </Link>
+          </div>
+          <div className="panel-body">
+            <div
+              className="pool-bar"
+              role="img"
+              aria-label={pool.map((p) => `${p.label}: ${p.count}`).join(", ")}
+            >
+              {pool.filter((p) => p.count > 0).map((p) => (
+                <span
+                  key={p.key}
+                  className="pool-seg"
+                  title={`${p.label}: ${formatNumber(p.count)}`}
+                  style={{ width: `${(p.count / poolTotal) * 100}%`, background: p.color }}
+                />
+              ))}
+            </div>
+
+            <ul className="pool-legend">
+              {pool.map((p) => (
+                <li key={p.key}>
+                  <Link href={statusHref(p.key)}>
+                    <span className="pool-dot" style={{ background: p.color }} />
+                    <span className="pool-name">
+                      {p.label}
+                      <small>{p.sub}</small>
+                    </span>
+                    <span className={`pool-count${p.count === 0 ? " is-zero" : ""}`}>{formatNumber(p.count)}</span>
+                    <span className="pool-pct">{share(p.count, poolTotal)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+          {/* ── Warnings ── */}
+          <section className="panel rise" style={{ ["--i" as string]: 6 }}>
+            <div className="panel-head">
+              <div>
+                <h2 className="panel-title">Varningar</h2>
+                <p className="panel-sub">Saker att hålla koll på</p>
+              </div>
+              {otherNudges.length > 0 && <span className="tab-count">{otherNudges.length}</span>}
             </div>
             {otherNudges.length === 0 ? (
-              <p style={{ padding: "16px 20px", fontSize: 14, color: "var(--text-muted)" }}>
+              <div className="row" style={{ padding: "16px 20px", gap: 10, color: "var(--text-muted)", fontSize: "var(--fs-sm)" }}>
+                <span className="kpi-icon" style={{ width: 28, height: 28, borderRadius: 8 }}><IconCheck size={14} /></span>
                 Inga aktiva varningar.
-              </p>
+              </div>
             ) : (
-              otherNudges.map((nudge) => (
-                <div key={nudge.title} style={{
-                  display: "flex",
-                  alignItems: "flex-start",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  padding: "12px 20px",
-                  borderBottom: "1px solid var(--border)",
-                }}>
-                  <div>
-                    <p style={{ fontWeight: 600, fontSize: 16, marginBottom: 2 }}>{nudge.title}</p>
-                    <p style={{ fontSize: 14, color: "var(--text-muted)", lineHeight: 1.4 }}>{nudge.description}</p>
-                  </div>
-                  <span style={{
-                    ...S.sectionLabel,
-                    background: "var(--amber-bg)",
-                    color: "var(--amber)",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "3px 7px",
-                    flexShrink: 0,
-                    border: "1px solid var(--amber-border)",
-                  }}>
-                    {nudge.severity === "medium" ? "Medel" : "Låg"}
-                  </span>
-                </div>
-              ))
+              <ul style={{ listStyle: "none" }}>
+                {otherNudges.map((nudge) => {
+                  const link = NUDGE_LINKS[nudge.title];
+                  return (
+                    <li key={nudge.title} className="nudge-row">
+                      <span
+                        className={`kpi-icon ${nudge.severity === "medium" ? "warn" : "neutral"}`}
+                        style={{ width: 28, height: 28, borderRadius: 8 }}
+                      >
+                        {nudge.severity === "medium" ? <IconAlert size={14} /> : <IconInfo size={14} />}
+                      </span>
+                      <div style={{ minWidth: 0 }}>
+                        <p style={{ fontWeight: 600, lineHeight: 1.35 }}>{nudge.title}</p>
+                        <p className="list-sub">{nudge.description}</p>
+                        {link && (
+                          <Link href={link.href} className="panel-link" style={{ marginTop: 6 }}>
+                            {link.label} <IconArrowRight size={14} />
+                          </Link>
+                        )}
+                      </div>
+                      <span className={`chip sm plain ${nudge.severity === "medium" ? "warn" : "neutral"}`}>
+                        {nudge.severity === "medium" ? "Medel" : "Låg"}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
-          </div>
+          </section>
 
-          {/* Senaste aktivitet */}
-          <ActivityPanel
-            preview={stats.recentReminderActivity}
-            sectionHeaderStyle={S.sectionHeader}
-            sectionLabelStyle={S.sectionLabel}
-          />
+        </div>
 
+        {/* ── Activity ── */}
+        <div className="span-5 rise" style={{ ["--i" as string]: 7 }}>
+          <ActivityPanel preview={stats.recentReminderActivity} />
         </div>
       </div>
     </div>

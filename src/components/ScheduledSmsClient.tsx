@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import type { ScheduledSms, SmsStep } from "@/types/clinic";
+import { IconCalendar, IconX } from "./ui/icons";
+import { formatDate, formatTime } from "./ui/format";
 
 export type ScheduledSmsRow = ScheduledSms & {
   patientName: string | null;
@@ -25,11 +27,28 @@ function badgeClass(status: string) {
   if (status === "cancelled" || status === "skipped") return "resolved";
   if (status === "failed" || status === "unknown") return "failed";
   if (status === "processing") return "ready";
-  return "waiting";
+  return "pending";
 }
 
-function formatScheduled(iso: string) {
-  return new Intl.DateTimeFormat("sv-SE", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
+type Tab = "active" | "sent" | "other" | "all";
+
+function tabOf(status: string): Exclude<Tab, "all"> {
+  if (status === "pending" || status === "processing") return "active";
+  if (status === "sent" || status === "dry_run") return "sent";
+  return "other";
+}
+
+/** "i dag 14:00", "i morgon 09:00", "om 5 dagar", or a date for the past. */
+function whenLabel(iso: string): string {
+  const d = new Date(iso);
+  const dayMs = 86_400_000;
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOf(d) - startOf(new Date())) / dayMs);
+  if (diffDays === 0) return `i dag ${formatTime(iso)}`;
+  if (diffDays === 1) return `i morgon ${formatTime(iso)}`;
+  if (diffDays > 1 && diffDays < 14) return `om ${diffDays} dagar`;
+  if (diffDays === -1) return `igår ${formatTime(iso)}`;
+  return "";
 }
 
 function contentLabel(row: ScheduledSmsRow, steps: SmsStep[]) {
@@ -52,6 +71,8 @@ export function ScheduledSmsClient({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [errorId, setErrorId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const initialActive = initialRows.some((r) => tabOf(r.status) === "active");
+  const [tab, setTab] = useState<Tab>(initialActive ? "active" : "all");
 
   async function cancel(id: string) {
     setBusyId(id);
@@ -78,122 +99,103 @@ export function ScheduledSmsClient({
     }
   }
 
+  const counts: Record<Tab, number> = { active: 0, sent: 0, other: 0, all: rows.length };
+  for (const r of rows) counts[tabOf(r.status)]++;
+  const visible = tab === "all" ? rows : rows.filter((r) => tabOf(r.status) === tab);
+
+  const tabs: { key: Tab; label: string }[] = [
+    { key: "active", label: "Aktiva" },
+    { key: "sent", label: "Skickade" },
+    { key: "other", label: "Avbrutna och övriga" },
+    { key: "all", label: "Alla" },
+  ];
+
   return (
-    <>
-      <style>{`
-        .ss-head {
-          display: grid;
-          grid-template-columns: 4px 1fr;
-          background: var(--surface-sub);
-          border: 1px solid var(--border);
-          border-bottom: 2px solid var(--border-dark);
-          border-radius: var(--radius) var(--radius) 0 0;
-        }
-        .ss-head-bar { background: transparent; }
-        .ss-head-inner {
-          display: grid;
-          grid-template-columns: 200px 160px 170px 1fr 130px 110px;
-          align-items: center;
-        }
-        .ss-head-cell {
-          padding: 12px 18px;
-          font-size: 14px;
-          font-weight: 700;
-          letter-spacing: 0.07em;
-          text-transform: uppercase;
-          color: var(--text-muted);
-        }
-
-        .ss-row {
-          display: grid;
-          grid-template-columns: 4px 1fr;
-          background: var(--surface);
-          border-bottom: 1px solid var(--border);
-        }
-        .ss-row:last-child { border-bottom: 0; }
-        .ss-row:nth-child(even) .ss-row-inner { background: var(--surface-sub); }
-
-        .ss-row-inner {
-          display: grid;
-          grid-template-columns: 200px 160px 170px 1fr 130px 110px;
-          align-items: center;
-        }
-        .ss-cell {
-          padding: 14px 18px;
-          font-size: 16px;
-          color: var(--text);
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .ss-name {
-          font-weight: 700;
-          font-size: 16px;
-          color: var(--text);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .ss-phone { font-size: 14px; color: var(--text-muted); white-space: nowrap; }
-        .ss-date { font-size: 14px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .ss-content { font-size: 14px; color: var(--text-muted); }
-      `}</style>
-
-      <div className="ss-head">
-        <div className="ss-head-bar" />
-        <div className="ss-head-inner">
-          <div className="ss-head-cell">Patient</div>
-          <div className="ss-head-cell">Telefon</div>
-          <div className="ss-head-cell">Schemalagt</div>
-          <div className="ss-head-cell">Innehåll</div>
-          <div className="ss-head-cell" style={{ borderLeft: "1px solid var(--border)" }}>Status</div>
-          <div className="ss-head-cell">Åtgärd</div>
-        </div>
-      </div>
-
-      <div className="table-wrap" style={{ borderRadius: "0 0 var(--radius) var(--radius)", overflow: "hidden" }}>
-        {rows.length === 0 && <div className="empty-state">Inga schemalagda SMS.</div>}
-        {rows.map((row) => (
-          <div key={row.id} className="ss-row">
-            <div style={{ background: "#c8d4d0", flexShrink: 0 }} />
-            <div className="ss-row-inner">
-              <div className="ss-cell">
-                <div className="ss-name">{row.patientName ?? "Okänd patient"}</div>
-              </div>
-              <div className="ss-cell">
-                <span className="ss-phone">{row.patientPhone ?? "—"}</span>
-              </div>
-              <div className="ss-cell">
-                <span className="ss-date">{formatScheduled(row.scheduled_for)}</span>
-              </div>
-              <div className="ss-cell">
-                <span className="ss-content">{contentLabel(row, steps)}</span>
-              </div>
-              <div className="ss-cell" style={{ borderLeft: "1px solid var(--border)" }}>
-                <span className={`badge ${badgeClass(row.status)}`}>{statusLabels[row.status] ?? row.status}</span>
-              </div>
-              <div className="ss-cell">
-                {row.status === "pending" ? (
-                  <>
-                    <button
-                      className="danger"
-                      onClick={() => cancel(row.id)}
-                      disabled={busyId === row.id}
-                      style={{ fontSize: 14, padding: "5px 12px", minHeight: "unset" }}
-                    >
-                      {busyId === row.id ? "…" : "Avbryt"}
-                    </button>
-                    {errorId === row.id && errorMsg && (
-                      <div style={{ marginTop: 4, fontSize: 12, color: "var(--red)" }}>{errorMsg}</div>
-                    )}
-                  </>
-                ) : (
-                  <span style={{ color: "var(--text-faint)", fontSize: 14 }}>—</span>
-                )}
-              </div>
-            </div>
-          </div>
+    <div className="panel rise" style={{ ["--i" as string]: 1 }}>
+      <div className="tabs" style={{ padding: "0 12px" }} role="tablist" aria-label="Filtrera schemalagda SMS">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.key}
+            className={`tab${tab === t.key ? " active" : ""}${counts[t.key] === 0 && tab !== t.key ? " is-empty" : ""}`}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+            <span className="tab-count">{counts[t.key]}</span>
+          </button>
         ))}
       </div>
-    </>
+
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Patient</th>
+              <th>Telefon</th>
+              <th>Schemalagt</th>
+              <th>Innehåll</th>
+              <th>Status</th>
+              <th style={{ textAlign: "right" }}>Åtgärd</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((row) => {
+              const when = whenLabel(row.scheduled_for);
+              return (
+                <tr key={row.id}>
+                  <td className="strong">{row.patientName ?? "Okänd patient"}</td>
+                  <td className="tnum">{row.patientPhone ?? <span className="faint">—</span>}</td>
+                  <td>
+                    <div className="tnum" style={{ fontWeight: 600, color: "var(--text)" }}>
+                      {formatDate(row.scheduled_for)} {formatTime(row.scheduled_for)}
+                    </div>
+                    {when && tabOf(row.status) === "active" && <div className="muted">{when}</div>}
+                  </td>
+                  <td><span className="tag">{contentLabel(row, steps)}</span></td>
+                  <td>
+                    <span className={`badge ${badgeClass(row.status)}`}>{statusLabels[row.status] ?? row.status}</span>
+                    {row.error && row.status !== "pending" && (
+                      <div className="muted" style={{ color: "var(--danger)", marginTop: 4, whiteSpace: "normal", maxWidth: 260 }}>
+                        {row.error}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    {row.status === "pending" ? (
+                      <>
+                        <button
+                          type="button"
+                          className="danger sm"
+                          onClick={() => cancel(row.id)}
+                          disabled={busyId === row.id}
+                        >
+                          {busyId === row.id ? <span className="spinner" aria-hidden="true" /> : <IconX size={14} />}
+                          {busyId === row.id ? "Avbryter…" : "Avbryt"}
+                        </button>
+                        {errorId === row.id && errorMsg && (
+                          <div style={{ marginTop: 4, fontSize: "var(--fs-xs)", color: "var(--danger)", fontWeight: 600 }}>{errorMsg}</div>
+                        )}
+                      </>
+                    ) : (
+                      <span className="faint">—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {visible.length === 0 && (
+        <div className="empty-state">
+          <span className="empty-icon"><IconCalendar /></span>
+          <span className="empty-title">{rows.length === 0 ? "Inga schemalagda SMS" : "Inga SMS i den här vyn"}</span>
+          <span>Schemalägg ett SMS från en kund på sidan Kunder (menyn ⋯ på raden).</span>
+        </div>
+      )}
+    </div>
   );
 }

@@ -1,103 +1,293 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { PatientSmsPopup } from "@/components/PatientSmsPopup";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { PatientActions } from "@/components/PatientActions";
+import { PatientDrawer, type DrawerLog } from "@/components/PatientDrawer";
+import { PatientSearch } from "@/components/PatientSearch";
+import { ScheduleSmsDialog } from "@/components/ScheduleSmsDialog";
+import { FollowUpTrack, FollowUpTrackLegend } from "@/components/FollowUpTrack";
 import { useToast } from "@/components/ToastProvider";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { IconArrowLeft, IconArrowRight, IconSend, IconUsers, IconX } from "@/components/ui/icons";
+import { daysSince, formatDate, formatNumber } from "@/components/ui/format";
+import { PATIENT_STATUS, statusMeta } from "@/components/ui/status";
 import { isRealSend } from "@/lib/sms/outcome";
 import { requestSend } from "@/lib/sms/sendClient";
-import type { Patient, ReminderLog, SmsStep } from "@/types/clinic";
+import type { TrackState, TrackStep } from "@/lib/patients/followupTrack";
+import type { StepOption } from "@/types/clinic";
 
-export type PatientRow = {
-  patient: Patient;
+/** One step of a patient's follow-up track, aligned by index with `steps`. */
+export type CompactTrack = { s: TrackState; at?: string };
+
+/** Everything a list row needs — and nothing more, since every patient ships. */
+export type PatientListRow = {
+  id: string;
+  /** First + last name when known, else the full name. */
+  name: string;
+  fullName: string;
+  phone: string | null;
+  normalizedPhone: string | null;
+  email: string | null;
+  lastBookingAt: string | null;
+  treatment: string | null;
+  doNotContact: boolean;
   status: string;
-  logs: ReminderLog[];
+  sentCount: number;
+  track: CompactTrack[];
 };
 
+type Sort = "oldest" | "recent";
+type ViewParams = { status: string; sort: Sort; q: string; page: number };
 type BulkState = "idle" | "sending" | "done";
 
-// Status → left-bar accent color (duplicated from page for client use)
-const statusAccent: Record<string, string> = {
-  Ready:              "#5bbfb5",
-  Sent:               "#3da89d",
-  "Future booking":   "#1a4f78",
-  "Missing phone":    "#a33030",
-  "Needs review":     "#a33030",
-  "Delivery pending": "#a33030",
-  "Do not contact":   "#7a5200",
-  Waiting:            "#c8d4d0",
-  "No valid booking": "#c8d4d0",
+const PAGE_SIZE = 50;
+
+// Filter tabs, in the order staff reach for them. "No valid booking" only
+// appears when it has members, so an empty edge case doesn't cost a tab.
+const FILTERS = [
+  "all",
+  "Ready",
+  "Waiting",
+  "Sent",
+  "Future booking",
+  "Delivery pending",
+  "Needs review",
+  "Missing phone",
+  "Do not contact",
+  "No valid booking",
+];
+
+// ── URL state ────────────────────────────────────────────────────────────────
+// The URL stays the source of truth (dashboard links, back/forward, reload,
+// shareable views), but it is written with the History API: Next syncs
+// useSearchParams from it without a server round trip.
+
+function readParams(sp: { get(name: string): string | null }): ViewParams {
+  const page = parseInt(sp.get("page") ?? "1", 10);
+  return {
+    status: sp.get("status") ?? "all",
+    sort: sp.get("sort") === "recent" ? "recent" : "oldest",
+    q: sp.get("q") ?? "",
+    page: Number.isFinite(page) && page > 1 ? page : 1,
+  };
+}
+
+function hrefFor(p: ViewParams): string {
+  const qs = new URLSearchParams();
+  if (p.status !== "all") qs.set("status", p.status);
+  if (p.sort !== "oldest") qs.set("sort", p.sort);
+  if (p.q) qs.set("q", p.q);
+  if (p.page > 1) qs.set("page", String(p.page));
+  const s = qs.toString();
+  return `/app/patients${s ? `?${s}` : ""}`;
+}
+
+function toTrack(steps: StepOption[], compact: CompactTrack[]): TrackStep[] {
+  return steps.map((step, i) => ({
+    id: step.id,
+    day: step.day,
+    active: step.active,
+    state: compact[i]?.s ?? "upcoming",
+    at: compact[i]?.at ?? null,
+  }));
+}
+
+// ── Row ──────────────────────────────────────────────────────────────────────
+// Memoized: ticking one checkbox re-renders one row, not fifty.
+
+type RowProps = {
+  row: PatientListRow;
+  steps: StepOption[];
+  selected: boolean;
+  sentCount: number;
+  onToggle: (id: string) => void;
+  onOpen: (id: string) => void;
+  onSchedule: (id: string) => void;
+  onDelete: (id: string) => void;
 };
 
-const statusLabels: Record<string, string> = {
-  Ready:              "Redo",
-  Sent:               "Skickat",
-  "Future booking":   "Har bokat en tid",
-  "Missing phone":    "Saknar telefon",
-  "Do not contact":   "Kontakta ej",
-  "Needs review":     "Behöver granskas",
-  "Delivery pending": "Leverans väntar",
-  Waiting:            "Väntar",
-  "No valid booking": "Ingen giltig bokning",
-};
+const Row = memo(function Row({ row, steps, selected, sentCount, onToggle, onOpen, onSchedule, onDelete }: RowProps) {
+  const days = daysSince(row.lastBookingAt);
+  const meta = statusMeta(row.status);
+  const track = useMemo(() => toTrack(steps, row.track), [steps, row.track]);
 
-function badgeClass(status: string) {
-  if (status === "Ready" || status === "Sent") return "ready";
-  if (status === "Future booking") return "future";
-  if (status === "Missing phone") return "missing";
-  if (status === "Needs review" || status === "Delivery pending") return "review";
-  if (status === "Do not contact") return "ignored";
-  return "waiting";
-}
+  return (
+    <tr className={selected ? "is-selected" : undefined}>
+      <td>
+        <input
+          type="checkbox"
+          className="cb"
+          checked={selected}
+          onChange={() => onToggle(row.id)}
+          aria-label={`Markera ${row.name}`}
+        />
+      </td>
 
-function formatDate(iso: string | null) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("sv-SE");
-}
+      <td>
+        <button type="button" className="pt-name" onClick={() => onOpen(row.id)} title="Visa detaljer och SMS-historik">
+          {row.name}
+        </button>
+        {/* Two lines, always: phone, then SMS count if any, else email.
+            Everything is in the tooltip and the drawer. */}
+        <span className="pt-sub" title={[row.phone, row.email].filter(Boolean).join(" · ") || undefined}>
+          {row.phone ? (
+            <span className="pt-phone">{row.phone}</span>
+          ) : (
+            <span className="pt-missing">Saknar telefon</span>
+          )}
+          {sentCount > 0 ? (
+            <> · <span className="pt-sms-count">{sentCount} SMS skicka{sentCount !== 1 ? "de" : "t"}</span></>
+          ) : row.email ? (
+            <> · {row.email}</>
+          ) : null}
+        </span>
+      </td>
 
-function daysSince(iso: string | null): number | null {
-  if (!iso) return null;
-  return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
-}
+      <td>
+        {row.lastBookingAt ? (
+          <div className="pt-date">
+            {formatDate(row.lastBookingAt)}
+            {days != null && <span> · {days} d</span>}
+          </div>
+        ) : (
+          <span className="faint">—</span>
+        )}
+        {row.treatment && (
+          <span className="pt-sub" style={{ maxWidth: 200 }} title={row.treatment}>
+            {row.treatment}
+          </span>
+        )}
+      </td>
 
-function patientDisplayName(p: Patient) {
-  if (p.first_name || p.last_name) return [p.first_name, p.last_name].filter(Boolean).join(" ");
-  return p.full_name;
-}
+      <td className="pt-col-track"><FollowUpTrack track={track} /></td>
 
-export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps?: SmsStep[] }) {
+      <td>
+        <span className={`chip ${meta.chip}`} title={meta.hint}>{meta.label}</span>
+      </td>
+
+      <td>
+        <PatientActions
+          patientId={row.id}
+          patientName={row.name}
+          doNotContact={row.doNotContact}
+          steps={steps}
+          onShowHistory={() => onOpen(row.id)}
+          onSchedule={() => onSchedule(row.id)}
+          onDelete={() => onDelete(row.id)}
+        />
+      </td>
+    </tr>
+  );
+});
+
+// ── List ─────────────────────────────────────────────────────────────────────
+
+export function PatientsClient({ rows, steps }: { rows: PatientListRow[]; steps: StepOption[] }) {
+  const searchParams = useSearchParams();
+  const params = readParams(searchParams);
+  const toast = useToast();
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // The field updates instantly; the URL follows a moment later.
+  const [query, setQuery] = useState(params.q);
+  const urlQ = useRef(params.q);
+  useEffect(() => {
+    // Back/forward changed the URL's query: bring the field along.
+    if (params.q !== urlQ.current) {
+      urlQ.current = params.q;
+      setQuery(params.q);
+    }
+  }, [params.q]);
+
+  const navigate = useCallback((next: Partial<ViewParams>, mode: "push" | "replace" = "push") => {
+    const merged = { ...readParams(new URLSearchParams(window.location.search)), ...next };
+    urlQ.current = merged.q;
+    window.history[mode === "push" ? "pushState" : "replaceState"](null, "", hrefFor(merged));
+  }, []);
+
+  const qTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (qTimer.current) clearTimeout(qTimer.current); }, []);
+  const onQueryChange = useCallback((value: string) => {
+    setQuery(value);
+    if (qTimer.current) clearTimeout(qTimer.current);
+    qTimer.current = setTimeout(() => navigate({ q: value.trim(), page: 1 }, "replace"), 300);
+  }, [navigate]);
+
+  // ── Derived view ──
+  const prepared = useMemo(
+    () =>
+      rows.map((row) => ({
+        row,
+        days: daysSince(row.lastBookingAt) ?? 0,
+        hay: [row.fullName, row.name, row.phone, row.email].filter(Boolean).join(" ").toLowerCase(),
+      })),
+    [rows]
+  );
+
+  const deferredQuery = useDeferredValue(query);
+  const search = deferredQuery.trim().toLowerCase();
+  const searched = useMemo(
+    () => (search ? prepared.filter((p) => p.hay.includes(search)) : prepared),
+    [prepared, search]
+  );
+
+  // Tab counts follow the search, so the tabs show where the matches are.
+  const counts = useMemo(() => {
+    const map = new Map<string, number>([["all", searched.length]]);
+    for (const p of searched) map.set(p.row.status, (map.get(p.row.status) ?? 0) + 1);
+    return map;
+  }, [searched]);
+
+  const filtered = useMemo(() => {
+    const list = params.status === "all" ? [...searched] : searched.filter((p) => p.row.status === params.status);
+    list.sort((a, b) => (params.sort === "recent" ? a.days - b.days : b.days - a.days));
+    return list;
+  }, [searched, params.status, params.sort]);
+
+  // While a new query is still on its way into the URL, show its first page.
+  const pageParam = query.trim() !== params.q ? 1 : params.page;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(pageParam, totalPages);
+  const from = filtered.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const to = Math.min(currentPage * PAGE_SIZE, filtered.length);
+  const pageRows = useMemo(
+    () => filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map((p) => p.row),
+    [filtered, currentPage]
+  );
+
+  // ── Selection & bulk send ──
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkState, setBulkState] = useState<BulkState>("idle");
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
   const [bulkErrors, setBulkErrors] = useState<{ name: string; reason: string }[]>([]);
-  const toast = useToast();
 
-  const allIds = rows.map((r) => r.patient.id);
-  const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+  const nameById = useMemo(() => new Map(rows.map((r) => [r.id, r.fullName])), [rows]);
+  const pageIds = pageRows.map((r) => r.id);
+  const selectedOnPage = pageIds.filter((id) => selected.has(id)).length;
+  const allSelected = pageIds.length > 0 && selectedOnPage === pageIds.length;
   const someSelected = selected.size > 0;
 
-  function toggleAll() {
-    if (allSelected) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(allIds));
-    }
-  }
-
-  function toggleOne(id: string) {
+  const toggleOne = useCallback((id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  }, []);
+
+  function toggleAll() {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(pageIds));
   }
 
   const clearSelection = useCallback(() => {
     setSelected(new Set());
     setBulkState("idle");
     setDoneMessage(null);
+    setBulkErrors([]);
   }, []);
 
   async function sendToSelected() {
@@ -112,7 +302,7 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
     let dryRun = 0;
     const failures: { name: string; reason: string }[] = [];
     for (const id of ids) {
-      const patientName = rows.find((r) => r.patient.id === id)?.patient.full_name ?? id;
+      const patientName = nameById.get(id) ?? id;
       const outcome = await requestSend({ patientId: id });
       if (isRealSend(outcome.kind)) {
         sent++;
@@ -149,357 +339,302 @@ export function PatientsClient({ rows, steps = [] }: { rows: PatientRow[]; steps
     setTimeout(() => { setBulkState("idle"); setDoneMessage(null); setBulkErrors([]); }, 10000);
   }
 
+  // ── Drawer, schedule and delete — one of each for the whole list ──
+  const [drawerId, setDrawerId] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sentDelta, setSentDelta] = useState<Map<string, number>>(new Map());
+  const [scheduleId, setScheduleId] = useState<string | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleKey, setScheduleKey] = useState(0);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const drawerRow = drawerId ? rowById.get(drawerId) ?? null : null;
+  const scheduleRow = scheduleId ? rowById.get(scheduleId) ?? null : null;
+  const deleteRow = deleteId ? rowById.get(deleteId) ?? null : null;
+
+  const openDrawer = useCallback((id: string) => { setDrawerId(id); setDrawerOpen(true); }, []);
+  const openSchedule = useCallback((id: string) => {
+    setScheduleId(id);
+    setScheduleKey((k) => k + 1);
+    setScheduleOpen(true);
+  }, []);
+  const askDelete = useCallback((id: string) => setDeleteId(id), []);
+
+  const onLogDeleted = useCallback((log: DrawerLog) => {
+    if (log.status !== "sent" && log.status !== "delivered") return;
+    setSentDelta((prev) => {
+      const next = new Map(prev);
+      if (drawerId) next.set(drawerId, (next.get(drawerId) ?? 0) - 1);
+      return next;
+    });
+  }, [drawerId]);
+
+  async function confirmDelete() {
+    if (!deleteId) return;
+    setDeleteBusy(true);
+    await fetch(`/api/patients/${deleteId}`, { method: "DELETE" });
+    window.location.reload();
+  }
+
+  // ── Navigation helpers ──
+  function goToPage(page: number) {
+    navigate({ page });
+    const top = panelRef.current?.getBoundingClientRect().top ?? 0;
+    if (top < 0) panelRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+
+  function linkProps(next: Partial<ViewParams>) {
+    return {
+      href: hrefFor({ ...params, q: query.trim(), ...next }),
+      onClick: (e: React.MouseEvent) => {
+        // Let modified clicks open a new tab as with any link.
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+        navigate({ q: query.trim(), ...next });
+      },
+    };
+  }
+
+  function clearFilters() {
+    setQuery("");
+    navigate({ status: "all", q: "", page: 1 });
+  }
+
+  const visibleFilters = FILTERS.filter(
+    (f) => f !== "No valid booking" || (counts.get(f) ?? 0) > 0 || params.status === f
+  );
+
+  const rangeText = filtered.length === 0
+    ? "Inga träffar"
+    : `Visar ${formatNumber(from)}–${formatNumber(to)} av ${formatNumber(filtered.length)}`;
+
+  const pager = totalPages > 1 && (
+    <div className="row" style={{ gap: 6 }}>
+      <button
+        type="button"
+        className="icon-btn sm bordered"
+        aria-label="Föregående sida"
+        disabled={currentPage <= 1}
+        onClick={() => goToPage(currentPage - 1)}
+      >
+        <IconArrowLeft size={14} />
+      </button>
+      <span className="tnum" style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", minWidth: 72, textAlign: "center" }}>
+        Sida {currentPage} / {totalPages}
+      </span>
+      <button
+        type="button"
+        className="icon-btn sm bordered"
+        aria-label="Nästa sida"
+        disabled={currentPage >= totalPages}
+        onClick={() => goToPage(currentPage + 1)}
+      >
+        <IconArrowRight size={14} />
+      </button>
+    </div>
+  );
+
+  const showBulkBar = someSelected || bulkState !== "idle";
+  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+
   return (
     <>
-      <style>{`
-        .pt-row {
-          display: grid;
-          grid-template-columns: 4px 1fr;
-          background: var(--surface);
-          border-bottom: 1px solid var(--border);
-          transition: background 120ms;
-        }
-        .pt-row:last-child { border-bottom: 0; }
-        .pt-row:nth-child(even) .pt-row-inner { background: var(--surface-sub); }
-        .pt-row:hover .pt-row-inner { background: #edf7f6; }
-        .pt-row.pt-selected .pt-row-inner {
-          background: rgba(91,191,181,0.07) !important;
-        }
+      <div className="panel rise" style={{ ["--i" as string]: 1 }} ref={panelRef}>
+        <nav className="tabs pt-tabs" aria-label="Filtrera på status">
+          {visibleFilters.map((filter) => {
+            const count = counts.get(filter) ?? 0;
+            const meta = filter === "all" ? null : PATIENT_STATUS[filter];
+            const isActive = params.status === filter;
+            return (
+              <a
+                key={filter}
+                {...linkProps({ status: filter, page: 1 })}
+                className={`tab${isActive ? " active" : ""}${count === 0 && !isActive ? " is-empty" : ""}`}
+                aria-current={isActive ? "page" : undefined}
+                title={meta ? `${meta.label} — ${meta.hint}` : "Alla kunder"}
+              >
+                {meta && <span className="tab-dot" style={{ background: meta.dot }} />}
+                {meta ? (meta.short ?? meta.label) : "Alla"}
+                <span className="tab-count">{formatNumber(count)}</span>
+              </a>
+            );
+          })}
+        </nav>
 
-        .pt-row-inner {
-          display: grid;
-          grid-template-columns: 36px 200px 160px 160px 110px 70px 1fr 175px auto;
-          align-items: center;
-          gap: 0;
-          padding: 0;
-          transition: background 120ms;
-        }
+        <div className="pt-toolbar">
+          <PatientSearch value={query} onChange={onQueryChange} />
+          <span className="pt-toolbar-meta" aria-live="polite">
+            {rangeText}
+            {search && <> för &ldquo;{deferredQuery.trim()}&rdquo;</>}
+          </span>
+          <div className="pt-toolbar-end">
+            <div className="seg" role="group" aria-label="Sortering">
+              <a
+                {...linkProps({ sort: "oldest", page: 1 })}
+                className={params.sort === "oldest" ? "active" : undefined}
+                aria-current={params.sort === "oldest" ? "true" : undefined}
+                title="Längst sedan senaste besök först"
+              >
+                Äldst besök först
+              </a>
+              <a
+                {...linkProps({ sort: "recent", page: 1 })}
+                className={params.sort === "recent" ? "active" : undefined}
+                aria-current={params.sort === "recent" ? "true" : undefined}
+                title="Senaste besök först"
+              >
+                Senast besök först
+              </a>
+            </div>
+            {pager}
+          </div>
+        </div>
 
-        .pt-cell {
-          padding: 16px 18px;
-          font-size: 16px;
-          color: var(--text);
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
+        <div className="table-scroll">
+          <table className="pt-table">
+            <thead>
+              <tr>
+                <th>
+                  <input
+                    type="checkbox"
+                    className="cb"
+                    checked={allSelected}
+                    ref={(el) => { if (el) el.indeterminate = selectedOnPage > 0 && !allSelected; }}
+                    onChange={toggleAll}
+                    disabled={pageRows.length === 0}
+                    aria-label={allSelected ? "Avmarkera alla på sidan" : "Markera alla på sidan"}
+                    title={allSelected ? "Avmarkera alla" : "Markera alla"}
+                  />
+                </th>
+                <th>Kund</th>
+                <th>Senaste besök</th>
+                <th className="pt-col-track" title="En markering per uppföljningssteg, med dag under">Uppföljningar</th>
+                <th>Status</th>
+                <th><span className="sr-only">Åtgärder</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageRows.map((row) => (
+                <Row
+                  key={row.id}
+                  row={row}
+                  steps={steps}
+                  selected={selected.has(row.id)}
+                  sentCount={Math.max(0, row.sentCount + (sentDelta.get(row.id) ?? 0))}
+                  onToggle={toggleOne}
+                  onOpen={openDrawer}
+                  onSchedule={openSchedule}
+                  onDelete={askDelete}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
 
-        .pt-cell-name { padding: 16px 20px; }
-        .pt-cell-cb {
-          padding: 0 0 0 12px;
-          display: flex;
-          align-items: center;
-          justify-content: flex-start;
-        }
+        {pageRows.length === 0 && (
+          <div className="empty-state">
+            <span className="empty-icon"><IconUsers /></span>
+            <span className="empty-title">Inga kunder matchar</span>
+            <span>Prova ett annat filter eller en annan sökning.</span>
+            {(params.status !== "all" || query.trim()) && (
+              <button type="button" className="secondary sm" style={{ marginTop: 10 }} onClick={clearFilters}>
+                Rensa filter och sökning
+              </button>
+            )}
+          </div>
+        )}
 
-        .pt-cb {
-          width: 15px;
-          height: 15px;
-          accent-color: var(--accent);
-          cursor: pointer;
-          flex-shrink: 0;
-        }
+        <div className="panel-foot">
+          <FollowUpTrackLegend />
+          <div className="row" style={{ gap: 14 }}>
+            <span className="tnum">{rangeText}</span>
+            {pager}
+          </div>
+        </div>
+      </div>
 
-        .pt-name {
-          font-weight: 700;
-          font-size: 16px;
-          color: var(--text);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .pt-email {
-          font-size: 14px;
-          color: var(--text-faint);
-          margin-top: 3px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .pt-phone-main {
-          font-size: 16px;
-          color: var(--text);
-          white-space: nowrap;
-        }
-        .pt-phone-norm {
-          font-size: 14px;
-          color: var(--text-faint);
-          margin-top: 2px;
-          font-variant-numeric: tabular-nums;
-        }
-        .pt-days {
-          font-variant-numeric: tabular-nums;
-          font-weight: 700;
-          font-size: 19px;
-          color: var(--text-mid);
-        }
-        .pt-days-label {
-          font-size: 14px;
-          color: var(--text-faint);
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          margin-top: 1px;
-        }
-        .pt-treatment {
-          font-size: 14px;
-          color: var(--text-muted);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .pt-date {
-          font-size: 16px;
-          color: var(--text-muted);
-          font-variant-numeric: tabular-nums;
-          white-space: nowrap;
-        }
-
-        .pt-head {
-          display: grid;
-          grid-template-columns: 4px 1fr;
-          background: var(--surface-sub);
-          border: 1px solid var(--border);
-          border-bottom: 2px solid var(--border-dark);
-          position: sticky;
-          top: 0;
-          z-index: 10;
-        }
-        .pt-head-bar { background: transparent; }
-        .pt-head-inner {
-          display: grid;
-          grid-template-columns: 36px 200px 160px 160px 110px 70px 1fr 175px auto;
-          align-items: center;
-        }
-        .pt-head-cell {
-          padding: 12px 18px;
-          font-size: 14px;
-          font-weight: 700;
-          letter-spacing: 0.07em;
-          text-transform: uppercase;
-          color: var(--text-muted);
-        }
-        .pt-head-cell:nth-child(2) { padding-left: 20px; }
-        .pt-head-cell-cb {
-          padding: 0 0 0 12px;
-          display: flex;
-          align-items: center;
-        }
-        .pt-actions-cell { padding: 12px 18px 12px 8px; }
-
-        /* Bulk action bar */
-        .pt-bulk-bar {
-          display: flex;
-          align-items: center;
-          gap: 10;
-          padding: 10px 16px;
-          background: #073B2C;
-          border: 1px solid var(--border);
-          border-bottom: none;
-          border-radius: var(--radius) var(--radius) 0 0;
-          animation: slideDown 0.18s ease;
-        }
-        @keyframes slideDown {
-          from { opacity: 0; transform: translateY(-6px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-        .pt-bulk-count {
-          font-size: 14px;
-          font-weight: 600;
-          color: rgba(255,255,255,0.9);
-          flex: 1;
-          white-space: nowrap;
-        }
-        .pt-bulk-send {
-          background: #5bbfb5;
-          color: #fff;
-          border: none;
-          border-radius: 5px;
-          padding: 6px 14px;
-          font-size: 14px;
-          font-weight: 600;
-          cursor: pointer;
-          white-space: nowrap;
-          transition: opacity 150ms;
-        }
-        .pt-bulk-send:disabled { opacity: 0.5; cursor: default; }
-        .pt-bulk-clear {
-          background: rgba(255,255,255,0.12);
-          color: rgba(255,255,255,0.8);
-          border: 1px solid rgba(255,255,255,0.2);
-          border-radius: 5px;
-          padding: 6px 12px;
-          font-size: 14px;
-          font-weight: 500;
-          cursor: pointer;
-          white-space: nowrap;
-          transition: background 150ms;
-        }
-        .pt-bulk-clear:hover { background: rgba(255,255,255,0.2); }
-        .pt-bulk-msg {
-          font-size: 14px;
-          color: rgba(255,255,255,0.7);
-          font-variant-numeric: tabular-nums;
-          white-space: nowrap;
-        }
-      `}</style>
-
-      {/* Bulk action bar */}
-      {someSelected && (
-        <div className="pt-bulk-bar">
-          <span className="pt-bulk-count">
-            {selected.size} {selected.size === 1 ? "vald" : "valda"}
+      {/* Floating bulk-action bar — sticks to the bottom while scrolling the list */}
+      {showBulkBar && (
+        <div className="bulk-bar" role="region" aria-label="Massåtgärder">
+          <span className="bulk-count">
+            {bulkState === "idle"
+              ? `${selected.size} ${selected.size === 1 ? "vald" : "valda"}`
+              : bulkState === "sending"
+                ? `Skickar ${progress.done}/${progress.total}`
+                : "Klart"}
           </span>
           {bulkState === "sending" && (
-            <span className="pt-bulk-msg">Skickar {progress.done}/{progress.total}…</span>
+            <span className="bulk-progress" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
           )}
-          {bulkState === "done" && doneMessage && (
-            <span className="pt-bulk-msg" style={{ color: bulkErrors.length > 0 ? "var(--red)" : undefined }}>
-              {doneMessage}
-            </span>
+          {bulkState === "done" && doneMessage && <span className="bulk-msg" aria-live="polite">{doneMessage}</span>}
+          <span className="bulk-sep" aria-hidden="true" />
+          {bulkState !== "done" && (
+            <button
+              type="button"
+              className="accent sm"
+              disabled={bulkState !== "idle" || !someSelected}
+              onClick={sendToSelected}
+            >
+              {bulkState === "sending" ? <span className="spinner" aria-hidden="true" /> : <IconSend size={14} />}
+              {bulkState === "sending" ? `Skickar ${progress.done}/${progress.total}…` : "Skicka SMS till valda"}
+            </button>
           )}
-          {bulkState === "done" && bulkErrors.length > 0 && (
-            <span style={{ fontSize: 14, color: "var(--red)", lineHeight: 1.4 }}>
-              {bulkErrors.map((e) => `${e.name}: ${e.reason}`).join(" · ")}
-            </span>
-          )}
-          <button
-            className="pt-bulk-send"
-            disabled={bulkState !== "idle"}
-            onClick={sendToSelected}
-          >
-            {bulkState === "sending" ? `Skickar ${progress.done}/${progress.total}…` : "Skicka SMS till valda"}
-          </button>
-          <button className="pt-bulk-clear" onClick={clearSelection}>
-            Avmarkera
+          <button type="button" className="ghost sm" onClick={clearSelection} disabled={bulkState === "sending"}>
+            <IconX size={14} /> {bulkState === "done" ? "Stäng" : "Avmarkera"}
           </button>
         </div>
       )}
 
-      {/* Sticky column header */}
-      <div
-        className="pt-head"
-        style={{
-          borderRadius: someSelected
-            ? "0 0 0 0"
-            : "var(--radius) var(--radius) 0 0",
-        }}
-      >
-        <div className="pt-head-bar" />
-        <div className="pt-head-inner">
-          <div className="pt-head-cell-cb">
-            <input
-              type="checkbox"
-              className="pt-cb"
-              checked={allSelected}
-              onChange={toggleAll}
-              title={allSelected ? "Avmarkera alla" : "Markera alla"}
-            />
-          </div>
-          <div className="pt-head-cell">Namn</div>
-          <div className="pt-head-cell">Telefon</div>
-          <div className="pt-head-cell">E-post</div>
-          <div className="pt-head-cell">Senaste bokning</div>
-          <div className="pt-head-cell">Dagar</div>
-          <div className="pt-head-cell">Behandling</div>
-          <div className="pt-head-cell" style={{ borderLeft: "1px solid var(--border)" }}>Status</div>
-          <div className="pt-head-cell pt-actions-cell">Åtgärder</div>
+      {bulkState === "done" && bulkErrors.length > 0 && (
+        <div className="bulk-errors" role="status">
+          <strong>{bulkErrors.length} {bulkErrors.length === 1 ? "kund" : "kunder"} fick inget SMS:</strong>
+          <ul>
+            {bulkErrors.map((e, i) => (
+              <li key={`${e.name}-${i}`}><strong>{e.name}</strong> — {e.reason}</li>
+            ))}
+          </ul>
         </div>
-      </div>
+      )}
 
-      <div className="table-wrap" style={{ borderRadius: "0 0 var(--radius) var(--radius)", overflow: "hidden" }}>
-        {rows.length === 0 && (
-          <div className="empty-state">Inga patienter matchar det valda filtret.</div>
-        )}
-        {rows.map(({ patient, status, logs }) => {
-          const accent = statusAccent[status] ?? "#c8d4d0";
-          const days = daysSince(patient.last_booking_at);
-          const isSelected = selected.has(patient.id);
-          return (
-            <div
-              key={patient.id}
-              className={`pt-row${isSelected ? " pt-selected" : ""}`}
-            >
-              <div style={{ background: accent, flexShrink: 0 }} />
-              <div className="pt-row-inner">
-                {/* Checkbox */}
-                <div className="pt-cell pt-cell-cb">
-                  <input
-                    type="checkbox"
-                    className="pt-cb"
-                    checked={isSelected}
-                    onChange={() => toggleOne(patient.id)}
-                  />
-                </div>
+      {drawerRow && (
+        <PatientDrawer
+          key={drawerRow.id}
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          patient={drawerRow}
+          track={toTrack(steps, drawerRow.track)}
+          onLogDeleted={onLogDeleted}
+        />
+      )}
 
-                {/* Name + email */}
-                <div className="pt-cell pt-cell-name">
-                  <PatientSmsPopup
-                    patientName={patientDisplayName(patient)}
-                    logs={logs}
-                  />
-                  {patient.email && (
-                    <div className="pt-email">{patient.email}</div>
-                  )}
-                </div>
+      {scheduleRow && (
+        <ScheduleSmsDialog
+          key={scheduleKey}
+          open={scheduleOpen}
+          patientId={scheduleRow.id}
+          patientName={scheduleRow.name}
+          steps={steps}
+          onClose={() => setScheduleOpen(false)}
+          onScheduled={() => setScheduleOpen(false)}
+        />
+      )}
 
-                {/* Phone */}
-                <div className="pt-cell">
-                  {patient.phone ? (
-                    <>
-                      <div className="pt-phone-main">{patient.phone}</div>
-                      {patient.normalized_phone && (
-                        <div className="pt-phone-norm">{patient.normalized_phone}</div>
-                      )}
-                    </>
-                  ) : (
-                    <span style={{ color: "var(--text-faint)", fontSize: 14 }}>—</span>
-                  )}
-                </div>
-
-                {/* Email column */}
-                <div className="pt-cell" style={{ color: "var(--text-muted)", fontSize: 14 }}>
-                  {patient.email ?? <span style={{ color: "var(--text-faint)" }}>—</span>}
-                </div>
-
-                {/* Last booking */}
-                <div className="pt-cell">
-                  <span className="pt-date">{formatDate(patient.last_booking_at)}</span>
-                </div>
-
-                {/* Days since */}
-                <div className="pt-cell">
-                  {days != null ? (
-                    <>
-                      <div className="pt-days">{days}</div>
-                      <div className="pt-days-label">dagar</div>
-                    </>
-                  ) : (
-                    <span style={{ color: "var(--text-faint)", fontSize: 14 }}>—</span>
-                  )}
-                </div>
-
-                {/* Treatment */}
-                <div className="pt-cell">
-                  <span className="pt-treatment">
-                    {patient.latest_treatment ?? <span style={{ color: "var(--text-faint)" }}>—</span>}
-                  </span>
-                </div>
-
-                {/* Status badge */}
-                <div className="pt-cell" style={{ borderLeft: "1px solid var(--border)" }}>
-                  <span className={`badge ${badgeClass(status)}`}>
-                    {statusLabels[status] ?? status}
-                  </span>
-                </div>
-
-                {/* Actions */}
-                <div className="pt-cell pt-actions-cell">
-                  <PatientActions patientId={patient.id} doNotContact={patient.do_not_contact} steps={steps} />
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <ConfirmDialog
+        open={deleteId !== null}
+        title="Ta bort patienten?"
+        description={
+          <>
+            {deleteRow ? <strong>{deleteRow.name}</strong> : "Patienten"} tas bort permanent tillsammans med sin koppling
+            till utskicken. Detta kan inte ångras.
+          </>
+        }
+        confirmLabel="Ta bort permanent"
+        busy={deleteBusy}
+        onConfirm={confirmDelete}
+        onClose={() => setDeleteId(null)}
+      />
     </>
   );
 }

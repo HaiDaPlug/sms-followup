@@ -1,6 +1,25 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase/client";
 
+// GET /api/logs?patientId=xxx — one patient's SMS history, newest first.
+// Loaded when the patient drawer opens, so the patients list doesn't have to
+// ship every message of every patient up front.
+export async function GET(request: Request) {
+  const patientId = new URL(request.url).searchParams.get("patientId");
+  if (!patientId) {
+    return NextResponse.json({ error: "patientId krävs" }, { status: 400 });
+  }
+
+  const { data, error } = await supabase
+    .from("reminder_logs")
+    .select("id, status, sequence_number, step_day, message, created_at, error, sent_at")
+    .eq("patient_id", patientId)
+    .eq("is_cycle_reset", false)
+    .order("created_at", { ascending: false });
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json(data ?? []);
+}
+
 // DELETE /api/logs?patientId=xxx  — clear all logs for one patient
 // DELETE /api/logs                — clear ALL logs (requires confirm=true in body)
 export async function DELETE(request: Request) {

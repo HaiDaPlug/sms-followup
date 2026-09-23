@@ -44,18 +44,20 @@ function ReplyBox({ row, onReplied }: { row: InboxRow; onReplied: (msg: string) 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
       <textarea
+        className="input"
+        aria-label="Svar"
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="Skriv svar…"
         rows={2}
-        style={{ resize: "vertical", fontSize: 14 }}
+        style={{ minHeight: 72, fontSize: "var(--fs-sm)" }}
         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }}
       />
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <button onClick={send} disabled={busy || !text.trim()} style={{ fontSize: 14 }}>
+        <button className="sm" onClick={send} disabled={busy || !text.trim()}>
           {busy ? "Skickar…" : "Skicka svar"}
         </button>
-        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Ctrl+Enter</span>
+        <span className="muted"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
         {error && <span style={{ fontSize: 14, color: "var(--red)" }}>{error}</span>}
       </div>
     </div>
@@ -69,15 +71,17 @@ function MessageCard({ row }: { row: InboxRow }) {
   const unreplied = !repliedAt;
 
   return (
-    <div style={{
-      background: "var(--surface)",
-      border: `1px solid ${unreplied ? "var(--accent)" : "var(--border)"}`,
-      borderRadius: "var(--radius)",
-      padding: "14px 18px",
-      display: "flex",
-      flexDirection: "column",
-      gap: 8,
-    }}>
+    <div
+      className="panel"
+      style={{
+        borderColor: unreplied ? "var(--accent-border)" : undefined,
+        boxShadow: unreplied ? "inset 3px 0 0 var(--accent), var(--shadow-card)" : undefined,
+        padding: "16px 20px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
       {/* Header */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -89,11 +93,7 @@ function MessageCard({ row }: { row: InboxRow }) {
             )}
             <span style={{ fontSize: 14, color: "var(--text-muted)" }}>{row.from_number}</span>
             {unreplied && (
-              <span style={{
-                fontSize: 12, fontWeight: 700, letterSpacing: "0.05em",
-                background: "var(--accent)", color: "#fff",
-                borderRadius: 3, padding: "1px 6px",
-              }}>NY</span>
+              <span className="chip sm ready">Ny</span>
             )}
           </div>
           <div style={{ fontSize: 16, color: "var(--text)", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -106,9 +106,8 @@ function MessageCard({ row }: { row: InboxRow }) {
           </span>
           {!repliedAt && (
             <button
-              className="secondary"
+              className="secondary sm"
               onClick={() => setOpen((o) => !o)}
-              style={{ fontSize: 14, padding: "3px 10px", minHeight: "unset" }}
             >
               {open ? "Avbryt" : "Svara"}
             </button>
@@ -155,41 +154,27 @@ export function InboxClient({ initialRows }: { initialRows: InboxRow[] }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Filter tabs */}
-      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", paddingBottom: 0 }}>
+      <div className="tabs" role="tablist" aria-label="Filtrera meddelanden">
         {(["unreplied", "all"] as const).map((f) => (
           <button
             key={f}
             type="button"
+            role="tab"
+            aria-selected={filter === f}
+            className={`tab${filter === f ? " active" : ""}`}
             onClick={() => setFilter(f)}
-            style={{
-              background: "none",
-              border: "none",
-              borderBottom: filter === f ? "2px solid var(--accent)" : "2px solid transparent",
-              borderRadius: 0,
-              fontSize: 14,
-              fontWeight: filter === f ? 600 : 400,
-              color: filter === f ? "var(--accent)" : "var(--text-muted)",
-              padding: "6px 14px",
-              cursor: "pointer",
-              minHeight: "unset",
-            }}
           >
-            {f === "unreplied" ? `Obesvarade (${rows.filter((r) => !r.replied_at).length})` : `Alla (${rows.length})`}
+            {f === "unreplied" ? "Obesvarade" : "Alla"}
+            <span className="tab-count">{f === "unreplied" ? rows.filter((r) => !r.replied_at).length : rows.length}</span>
           </button>
         ))}
       </div>
 
       {visible.length === 0 ? (
-        <div style={{
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
-          padding: "40px 24px",
-          textAlign: "center",
-          color: "var(--text-muted)",
-          fontSize: 16,
-        }}>
-          {filter === "unreplied" ? "Inga obesvarade meddelanden." : "Inga inkommande meddelanden ännu."}
+        <div className="panel empty-state">
+          <span className="empty-title">
+            {filter === "unreplied" ? "Inga obesvarade meddelanden" : "Inga inkommande meddelanden ännu"}
+          </span>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
