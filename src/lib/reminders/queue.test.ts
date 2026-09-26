@@ -3,8 +3,13 @@ import { dueAt, overdueDays, prioritizeQueue, type QueueCandidate } from "./queu
 
 const STEP = "aaaaaaaa-0000-4000-8000-000000000005";
 
+// One instant for the whole file. Reading Date.now() per candidate let the
+// millisecond tick between two "equal" candidates under load, so the tie-break
+// test saw different due dates and sorted by time instead of by patient id.
+const NOW = Date.now();
+
 function daysAgo(days: number): string {
-  return new Date(Date.now() - days * 86_400_000).toISOString();
+  return new Date(NOW - days * 86_400_000).toISOString();
 }
 
 function candidate(
