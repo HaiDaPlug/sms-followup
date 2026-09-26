@@ -149,6 +149,22 @@ async function reconcileStalePendingDeliveries(): Promise<void> {
 }
 
 /**
+ * last_booking_at only moves when something writes to the patient, and a
+ * booking made for a future date is deliberately excluded at that write
+ * (migration 022). Without this sweep a rebooked patient's new cycle stays
+ * anchored on the previous visit after the appointment has passed. Throws
+ * rather than continuing: sending against stale anchors is the bug this fixes
+ * (migration 027).
+ */
+async function refreshPassedBookingMetadata(): Promise<number> {
+  const { data, error } = await supabase.rpc("refresh_passed_booking_metadata");
+  if (error) {
+    throw new Error(`refresh_passed_booking_metadata failed: ${error.message}`);
+  }
+  return typeof data === "number" ? data : 0;
+}
+
+/**
  * Sends a reminder to a single patient. Accepts the pre-loaded store so the
  * daily batch doesn't re-fetch from the DB for every patient.
  *
@@ -514,6 +530,9 @@ export async function processDailyReminders() {
     return { processed: 0, logs: [], skipped: "Påminnelseautomation är inaktiv" };
   }
 
+  // Before the read, so every anchor below reflects appointments that have passed.
+  const refreshedPatients = await refreshPassedBookingMetadata();
+
   // Load everything once — no per-patient re-fetch
   const store = await readStore();
   const activeScheduledPatientIds = await getActiveScheduledSmsPatientIds();
@@ -636,7 +655,15 @@ export async function processDailyReminders() {
     // non-fatal
   }
 
-  return { processed: results.length, sent, dry_run: dryRun, failed, skipped, results };
+  return {
+    processed: results.length,
+    sent,
+    dry_run: dryRun,
+    failed,
+    skipped,
+    refreshed_patients: refreshedPatients,
+    results
+  };
 }
 
 export async function processScheduledSms() {

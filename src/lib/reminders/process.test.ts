@@ -593,4 +593,38 @@ describe("processDailyReminders", () => {
     expect(result.processed).toBe(0);
     expect(repo.readStore).not.toHaveBeenCalled();
   });
+
+  it("moves passed booking anchors forward before reading the store", async () => {
+    // A rebooked appointment only becomes last_booking_at once it has passed,
+    // and nothing else writes to the patient then. The sweep must run before
+    // the read, or this run would still anchor on the previous visit.
+    const settings = makeSettings({ sms_steps: steps, dry_run_mode: true });
+    repo.getSettings.mockResolvedValue(settings);
+    repo.readStore.mockResolvedValue(makeStore([], settings));
+    repo.getActiveScheduledSmsPatientIds.mockResolvedValue(new Set<string>());
+    repo.insertDailySnapshot.mockResolvedValue(undefined);
+    mockNoStalePending({});
+    supabaseMock.rpc.mockResolvedValue({ data: 3, error: null });
+
+    const result = await processDailyReminders();
+
+    expect(supabaseMock.rpc).toHaveBeenCalledWith("refresh_passed_booking_metadata");
+    const refreshCall = supabaseMock.rpc.mock.invocationCallOrder[0];
+    expect(refreshCall).toBeLessThan(repo.readStore.mock.invocationCallOrder[0]);
+    expect(result.refreshed_patients).toBe(3);
+  });
+
+  it("fails the run instead of sending against stale anchors when the refresh fails", async () => {
+    const settings = makeSettings({ sms_steps: steps });
+    repo.getSettings.mockResolvedValue(settings);
+    mockNoStalePending({});
+    supabaseMock.rpc.mockResolvedValue({
+      data: null,
+      error: { message: "function public.refresh_passed_booking_metadata() does not exist" }
+    });
+
+    await expect(processDailyReminders()).rejects.toThrow("refresh_passed_booking_metadata failed");
+    expect(repo.readStore).not.toHaveBeenCalled();
+    expect(providerMock.sendSms).not.toHaveBeenCalled();
+  });
 });

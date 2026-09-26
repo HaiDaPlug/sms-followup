@@ -16,6 +16,7 @@ import { supabase } from "@/lib/supabase/client";
 import { createScheduledSms, readStore } from "@/lib/storage/store";
 import { processDailyReminders, processScheduledSms } from "@/lib/reminders/process";
 import {
+  calculatePatientReminderStatus,
   getNextSchedulableSequence,
   latestValidBooking,
   renderSmsTemplate,
@@ -245,8 +246,11 @@ describe("daily follow-ups against the real schema", () => {
     expect(gotFiveDay.length).toBeGreaterThan(0);
 
     await rpc("sandbox_advance_days", { p_days: 9 });
-    const patients = await loadPatients();
     const second = await runDaily();
+    // Read after the run: the cron first moves last_booking_at onto visits
+    // that have since passed (027). Before 11:00 UTC that includes Dag 0,
+    // whose visit was still ahead at reset and is now eight-odd days back.
+    const patients = await loadPatients();
 
     const expected = patients
       .filter((p) => p.last_booking_at)
@@ -269,7 +273,10 @@ describe("daily follow-ups against the real schema", () => {
   });
 });
 
-describe("known gap R4: a webhook rebooking leaves last_booking_at on the old visit", () => {
+// R4, fixed by 027: a webhook rebooking for a future appointment cannot set
+// last_booking_at (022), so the daily cron moves it once the appointment has
+// passed, before it reads the store.
+describe("R4: a webhook rebooking becomes the anchor once the appointment has passed", () => {
   // Payload values shaped like src/lib/webhooks/bokadirekt.ts bookingRpcParams.
   async function rebook(age: number, bookingAt: Date) {
     const phone = cohortPhone(age);
@@ -313,9 +320,11 @@ describe("known gap R4: a webhook rebooking leaves last_booking_at on the old vi
     return data as Booking;
   }
 
-  it("anchors the new cycle on the old visit: early sends and a daily 'Redan reserverad' collision", async () => {
+  it("anchors the new cycle on the new visit once it has passed: no early sends, no 'Redan reserverad'", async () => {
     // Dag 3: nothing sent yet. Dag 6: already had the 5-day step for the old
     // visit. Dag 364: already had the 180-day step, 365 not yet crossed.
+    // Before the fix these got, in order: an early 5-day SMS, a daily
+    // "Redan reserverad" collision, and a 365-day SMS a day after a visit.
     const ages = [3, 6, 364];
     const first = await runDaily();
     expect(first.rows.find((row) => row.patientId === patientId(6))?.stepDay).toBe(5);
@@ -338,9 +347,9 @@ describe("known gap R4: a webhook rebooking leaves last_booking_at on the old vi
       expect(resets.map((log) => log.booking_id)).toEqual([newBookings.get(age)!.id]);
     }
 
-    // Three days on, the new appointment is a day in the past. Nothing in
-    // production refreshes last_booking_at on time passing, and the shift
-    // mirrors that, so the column still names the OLD visit.
+    // Three days on, the new appointment is a day in the past. Time passing
+    // alone still writes nothing (the shift mirrors production), so until the
+    // cron runs the column names the OLD visit: the move below is the cron's.
     await rpc("sandbox_advance_days", { p_days: 3 });
     const shifted = await loadPatients();
     const { data: oldBookings } = await supabase
@@ -353,37 +362,175 @@ describe("known gap R4: a webhook rebooking leaves last_booking_at on the old vi
       expect(Date.parse(patient.last_booking_at!)).toBe(Date.parse(oldVisit.booking_at));
     }
 
-    const second = await runDaily();
-    const row = (age: number) => second.rows.find((r) => r.patientId === patientId(age));
-    const logs = await loadLogs();
-    const lastLog = (age: number) => logs.filter((log) => log.patient_id === patientId(age)).at(-1)!;
+    /** The rebooked visits as stored now: every time travel shifts them. */
+    async function loadNewVisits() {
+      const { data, error } = await supabase
+        .from("bookings")
+        .select("id, booking_at")
+        .in("id", ages.map((age) => newBookings.get(age)!.id));
+      if (error) throw new Error(error.message);
+      return new Map(ages.map((age) => [age, data.find((b) => b.id === newBookings.get(age)!.id)!]));
+    }
 
-    // Dag 3: the 5-day message goes out one day after the NEW visit, counted
-    // from the old one, and is filed against the old booking.
-    expect(row(3)).toMatchObject({ status: "dry_run", stepDay: 5 });
-    expect(lastLog(3).booking_id).toBe(cohortBookingId(3));
+    /**
+     * One cron run, then checks the anchor it used and the whole days elapsed
+     * since the NEW visit, measured from the run's own start as the engine
+     * measures them.
+     */
+    async function runAndCheckAnchor(expectedElapsedDays: number) {
+      const run = await runDaily();
+      const patients = await loadPatients();
+      const newVisits = await loadNewVisits();
+      for (const age of ages) {
+        const patient = patients.find((p) => p.id === patientId(age))!;
+        const newVisit = newVisits.get(age)!;
+        expect(Date.parse(patient.last_booking_at!), `Dag ${age}`).toBe(Date.parse(newVisit.booking_at));
+        expect(elapsedDays(patient.last_booking_at!, run.startedAt), `Dag ${age}`).toBe(expectedElapsedDays);
+      }
+      return run;
+    }
 
-    // Dag 6: the fresh cycle owes the 5-day step again, but the reservation is
-    // keyed on (patient, OLD booking, step) which the previous cycle already
-    // holds. 23505 becomes a skip -- and it took one of the 25 daily slots.
-    expect(row(6)).toMatchObject({ status: "skipped", error: "Redan reserverad av parallell förfrågan" });
-    expect(lastLog(6).booking_id).toBe(cohortBookingId(6));
+    // The status the dashboard would show, from the real store.
+    async function statusOf(age: number) {
+      const store = await readStore();
+      return calculatePatientReminderStatus(
+        store.patients.find((p) => p.id === patientId(age))!,
+        store.reminder_settings[0],
+        store.bookings,
+        store.reminder_logs,
+        store.review_items
+      );
+    }
 
-    // Dag 364: a "long time no see" 365-day message one day after a visit.
-    expect(row(364)).toMatchObject({ status: "dry_run", stepDay: 365 });
-    expect(lastLog(364).booking_id).toBe(cohortBookingId(364));
+    // The cron moves all three onto the new visit before it reads the store.
+    // At least three: before 11:00 UTC the sweep also gives Dag 0 its first
+    // anchor, since that visit was still ahead at reset.
+    const second = await runAndCheckAnchor(1);
+    expect(second.result.refreshed_patients).toBeGreaterThanOrEqual(ages.length);
+    for (const age of ages) {
+      // One day after a visit nobody is even considered: no row, no log.
+      expect(second.rows.find((r) => r.patientId === patientId(age)), `Dag ${age}`).toBeUndefined();
+      expect(await statusOf(age), `Dag ${age}`).toBe("Waiting");
+    }
 
-    // And it repeats every day until some other write refreshes the column.
+    // Four days after the new visit: still waiting, and the sweep has nothing
+    // left to move for these three.
+    await rpc("sandbox_advance_days", { p_days: 3 });
+    const third = await runAndCheckAnchor(4);
+    for (const age of ages) {
+      expect(third.rows.find((r) => r.patientId === patientId(age)), `Dag ${age}`).toBeUndefined();
+      expect(await statusOf(age), `Dag ${age}`).toBe("Waiting");
+    }
+
+    // Five days after the new visit: the new cycle's first step, filed
+    // against the NEW booking, so it cannot collide with the old cycle's
+    // reservations on the 025 unique index.
     await rpc("sandbox_advance_days", { p_days: 1 });
-    const third = await runDaily();
-    expect(third.rows.find((r) => r.patientId === patientId(6))).toMatchObject({
-      status: "skipped",
-      error: "Redan reserverad av parallell förfrågan"
-    });
-    const collisions = (await loadLogs()).filter(
-      (log) => log.patient_id === patientId(6) && log.error === "Redan reserverad av parallell förfrågan"
+    const fourth = await runAndCheckAnchor(5);
+    const logs = await loadLogs();
+    for (const age of ages) {
+      expect(fourth.rows.find((r) => r.patientId === patientId(age)), `Dag ${age}`).toMatchObject({
+        status: "dry_run",
+        stepDay: 5,
+        stepId: STEP_BY_DAY.get(5)
+      });
+      const sinceWebhook = logs.filter(
+        (log) => log.patient_id === patientId(age) && !logsAfterWebhook.some((earlier) => earlier.id === log.id)
+      );
+      expect(
+        sinceWebhook.map((log) => [log.status, log.step_day, log.booking_id]),
+        `Dag ${age}`
+      ).toEqual([["dry_run", 5, newBookings.get(age)!.id]]);
+    }
+    expect(logs.filter((log) => log.error === "Redan reserverad av parallell förfrågan")).toEqual([]);
+    expect(providerMock.sendSms).not.toHaveBeenCalled();
+  });
+});
+
+describe("refresh_passed_booking_metadata() (027) against the real schema", () => {
+  /** A booking written straight to the table, as an import would, with no metadata refresh. */
+  async function addBooking(age: number, bookingAt: Date, cancelled: boolean, treatment: string) {
+    const { data, error } = await supabase
+      .from("bookings")
+      .insert({
+        external_booking_id: `sandbox-027-${age}-${bookingAt.getTime()}`,
+        patient_id: patientId(age),
+        patient_name: `Sandbox Dag ${age}`,
+        booking_at: bookingAt.toISOString(),
+        treatment,
+        status: cancelled ? "Cancelled" : "Booked",
+        cancelled,
+        source: "sandbox"
+      })
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return data as Booking;
+  }
+
+  it("moves exactly the patients with a newer passed booking, and never moves one backwards", async () => {
+    // A fresh cohort was written through 022 already: nothing to move.
+    expect(await rpc<number>("refresh_passed_booking_metadata")).toBe(0);
+
+    // Dag 60: attended a newer visit yesterday -- the one patient that moves.
+    const attended = await addBooking(60, new Date(Date.now() - DAY_MS), false, "Ny behandling");
+    // Dag 90: a newer visit yesterday, but cancelled.
+    await addBooking(90, new Date(Date.now() - DAY_MS), true, "Avbokad behandling");
+    // Dag 180: a newer appointment, still ahead.
+    await addBooking(180, new Date(Date.now() + DAY_MS), false, "Kommande behandling");
+    // Dag 365: its stored visit cancelled after the fact, with an older
+    // attended one on file. Going back is the cancel RPC's job, not the sweep's.
+    await addBooking(365, new Date(Date.now() - 400 * DAY_MS), false, "Äldre behandling");
+    const { error } = await supabase.from("bookings").update({ cancelled: true }).eq("id", cohortBookingId(365));
+    if (error) throw new Error(error.message);
+
+    const before = await loadPatients();
+    expect(await rpc<number>("refresh_passed_booking_metadata")).toBe(1);
+    const after = await loadPatients();
+
+    const moved = after.find((p) => p.id === patientId(60))!;
+    expect(Date.parse(moved.last_booking_at!)).toBe(Date.parse(attended.booking_at!));
+    expect(moved.latest_treatment).toBe("Ny behandling");
+    // Everyone else untouched, down to updated_at: not rewritten to the same
+    // value either, so the sweep costs nothing for patients already current.
+    for (const patient of before.filter((p) => p.id !== patientId(60))) {
+      const now = after.find((p) => p.id === patient.id)!;
+      expect(
+        [now.last_booking_at, now.latest_treatment, now.updated_at],
+        patient.full_name
+      ).toEqual([patient.last_booking_at, patient.latest_treatment, patient.updated_at]);
+    }
+
+    // Idempotent: a second sweep the same day finds nothing.
+    expect(await rpc<number>("refresh_passed_booking_metadata")).toBe(0);
+  });
+
+  it("gives a patient confirmed before their first visit an anchor once that visit has passed", async () => {
+    // The review-queue case: patient and booking exist before the visit, so
+    // 022 leaves last_booking_at null and no later write ever sets it.
+    const confirmed = await addPatient(900_444, 23, new Date(Date.now() + HOUR_MS), "bekräftad före besöket");
+    expect(confirmed.last_booking_at).toBeNull();
+    expect(await rpc<number>("refresh_passed_booking_metadata")).toBe(0);
+
+    // Every patient without an anchor has a visit less than a day ahead: the
+    // one above and, before 11:00 UTC, Dag 0.
+    const unanchored = (await loadPatients()).filter((p) => !p.last_booking_at).map((p) => p.id);
+    expect(unanchored).toContain(confirmed.id);
+
+    await rpc("sandbox_advance_days", { p_days: 1 });
+    expect(await rpc<number>("refresh_passed_booking_metadata")).toBe(unanchored.length);
+
+    const patients = await loadPatients();
+    const { data: visit, error } = await supabase
+      .from("bookings")
+      .select("booking_at")
+      .eq("patient_id", confirmed.id)
+      .single();
+    if (error) throw new Error(error.message);
+    expect(Date.parse(patients.find((p) => p.id === confirmed.id)!.last_booking_at!)).toBe(
+      Date.parse(visit.booking_at)
     );
-    expect(collisions).toHaveLength(2);
+    expect(patients.filter((p) => !p.last_booking_at)).toEqual([]);
   });
 });
 

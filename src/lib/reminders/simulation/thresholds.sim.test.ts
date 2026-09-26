@@ -394,40 +394,53 @@ describe("a patient visiting today", () => {
   });
 });
 
-describe("known gap R4: a new patient confirmed from the review queue before the first visit never gets follow-ups", () => {
-  // Current: the BokaDirekt webhook never creates a patient. For an unknown
-  // customer it stages an open pending_booking_match review item, and the
-  // patient only appears when an operator confirms it (confirm_booking_match
-  // -> apply_bokadirekt_booking with a null patient). That refreshes
+describe("R4 fixed: a new patient confirmed from the review queue before the first visit gets follow-ups", () => {
+  // The BokaDirekt webhook never creates a patient. For an unknown customer it
+  // stages an open pending_booking_match review item, and the patient only
+  // appears when an operator confirms it (confirm_booking_match ->
+  // apply_bokadirekt_booking with a null patient). That refreshes
   // last_booking_at over PAST bookings only, so a confirmation made before the
-  // visit leaves it null. Once the visit passes nothing refreshes it (the cron
-  // only refreshes has_future_booking), so the patient drops from
-  // "Future booking" to "No valid booking", a hard block the cron does not
-  // even log for, until a CSV import or another write happens to recompute it.
-  // A confirmation made AFTER the visit does not have the gap: the refresh then
-  // sees the visit and the patient enters the sequence normally.
-  // Desired: the patient enters the 5/14-day sequence from the visit once it
-  // has happened, whenever the operator confirmed.
+  // visit leaves it null.
+  // Before 027 nothing refreshed it once the visit passed, so the patient
+  // dropped from "Future booking" to "No valid booking" and never got a
+  // follow-up. Now the first cron after the visit (day 3) sets last_booking_at
+  // to it, and the 5- and 14-day SMS follow on days 8 and 17, the same days as
+  // a confirmation made after the visit (the contrast below).
 
-  it("confirmed before the visit: stays Future booking, then No valid booking, and receives nothing in 20 days", async () => {
+  it("confirmed before the visit: stays Future booking, then the 5-day SMS on day 8 and the 14-day on day 17", async () => {
     setNow(atSimDay(0, 9));
     // Booked online and confirmed by the operator in the same minute.
     const id = clinic.addPatient({ name: "Webb Patient", via: "confirmedMatch", visitDay: 2, visitHourUtc: 11 });
     expect(clinic.patient(id)).toMatchObject({ last_booking_at: null, source: "bokadirekt_webhook" });
     expect(clinic.logsFor(id).map((log) => log.is_cycle_reset)).toEqual([true]);
     expect(clinic.tables.review_items.map((item) => [item.type, item.status])).toEqual([["pending_booking_match", "resolved"]]);
+    const bookingId = clinic.tables.bookings.find((b) => b.patient_id === id)!.id;
 
     const runs = await clinic.runDays(20);
     expect(runs.map((run) => run.simDay)).toEqual(range(1, 20));
 
     const table = clinic.formatTimeline();
     expect(snapshotOn(2)).toMatchObject({ total_patients: 1, future_booking: 1 });
-    expect(snapshotOn(3)).toMatchObject({ total_patients: 1, future_booking: 0, no_valid_booking: 1 });
-    expect(snapshotOn(20)).toMatchObject({ total_patients: 1, no_valid_booking: 1 });
-    expect(runs.every((run) => run.result.processed === 0), table).toBe(true);
-    expect(clinic.sent, table).toEqual([]);
-    expect(clinic.patient(id).last_booking_at).toBeNull();
-    expect(await clinic.statusOf(id)).toBe("No valid booking");
+    // Regression pin: day 3's cron (the first after the 11:00 visit on day 2) is
+    // the one that fills the null anchor, so the patient is never "No valid booking".
+    expect(runs.map((run) => [run.simDay, (run.result as { refreshed_patients?: number }).refreshed_patients])).toEqual(
+      range(1, 20).map((day) => [day, day === 3 ? 1 : 0])
+    );
+    expect(snapshotOn(3)).toMatchObject({ total_patients: 1, future_booking: 0, no_valid_booking: 0, waiting: 1 });
+    expect(clinic.tables.daily_snapshots.every((row) => row.no_valid_booking === 0), table).toBe(true);
+    expect(clinic.patient(id).last_booking_at).toBe(atSimDay(2, 11));
+
+    expect(
+      clinic.sendsFor(id).map((entry) => [entry.simDay, entry.daysSinceVisitDate, entry.stepDay, entry.bookingId]),
+      table
+    ).toEqual([
+      [8, 6, 5, bookingId],
+      [17, 15, 14, bookingId]
+    ]);
+    // 5d21h after the visit: the first 08:00 cron once 5 x 24h have passed (R2).
+    expect(clinic.sendsFor(id).map((entry) => entry.hoursSinceVisit)).toEqual([5 * 24 + 21, 14 * 24 + 21]);
+    expect(clinic.providerCallsFor(id).map((call) => call.simDay), table).toEqual([8, 17]);
+    expect(await clinic.statusOf(id)).toBe("Waiting");
   });
 
   it("contrast, confirmed after the visit: last_booking_at is the visit and the 5- and 14-day SMS follow it", async () => {
@@ -462,6 +475,4 @@ describe("known gap R4: a new patient confirmed from the review queue before the
     // The cycle_reset carries the confirmation time, a day after the visit.
     expect(clinic.timeline(id)[0]).toMatchObject({ isCycleReset: true, simDay: 3, daysSinceVisitDate: 1 });
   });
-
-  it.todo("desired: a new patient confirmed before the first visit gets the 5-day SMS 5 days after that visit");
 });

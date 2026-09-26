@@ -22,9 +22,11 @@ vi.mock("@/lib/sms/provider", async () => (await import("@/test/sim/fakeClinic")
  *
  * The webhook writes a cycle_reset and refreshes last_booking_at, but 022's
  * refresh only counts visits with booking_at <= now(). A rebooking for an
- * upcoming appointment therefore leaves last_booking_at on the PREVIOUS visit,
- * and nothing re-runs the refresh when that appointment passes. From then on
- * the new cycle (logs after the reset) is measured against the old visit date.
+ * upcoming appointment therefore leaves last_booking_at on the PREVIOUS visit
+ * until the appointment has passed. Before migration 027 nothing re-ran the
+ * refresh then, and the new cycle was measured against the old visit (gap R4).
+ * The daily cron now calls refresh_passed_booking_metadata before reading the
+ * store, so the first cron after the appointment re-anchors the cycle on it.
  *
  * Every visit here is at 11:00 UTC, after the 08:00 UTC cron, so a step with
  * trigger day N first fires on calendar day N + 1 after its anchor visit (R2).
@@ -109,15 +111,13 @@ describe("rebooking for an upcoming appointment", () => {
   });
 });
 
-describe("known gap R4a: short gap after a rebooking is anchored on the old visit", () => {
-  // Current: once the day-7 appointment passes, last_booking_at still says day 0.
-  // The new cycle has no sends yet and the patient is already 7+ days past the
-  // OLD visit, so the 5-day SMS goes out the morning after the new visit and the
-  // 14-day SMS on old-visit day 15, only 8 days after the new visit. Both logs
-  // reference the old booking (latestValidBooking matches last_booking_at).
-  // Desired: the cycle is anchored on the day-7 visit, i.e. 5-day on day 13 and
-  // 14-day on day 22 (the refreshed contrast below).
-  it("sends the 5-day SMS on day 8 and the 14-day on day 15, 1 and 8 days after the new visit", async () => {
+describe("R4a fixed: a short gap after a rebooking is anchored on the new visit", () => {
+  // Before 027: last_booking_at stayed on day 0 after the day-7 appointment, so
+  // the 5-day SMS went out on day 8 (21 hours after the new visit) and the 14-day
+  // on day 15, both filed against the old booking.
+  // Now: day 8's cron refreshes the anchor to the day-7 visit before it reads the
+  // store, so the new cycle runs from it: 5-day on day 13, 14-day on day 22.
+  it("sends the 5-day SMS on day 13 and the 14-day on day 22, against the new booking", async () => {
     const id = importPatientSeenOn(0, "Anna Andersson");
     const oldBookingId = clinic.tables.bookings[0].id;
     await clinic.runDays(2);
@@ -125,31 +125,38 @@ describe("known gap R4a: short gap after a rebooking is anchored on the old visi
     const newVisit = atSimDay(7, 11);
     await clinic.runDays(5); // days 3..7, blocked (see above)
 
+    // Regression pin: the anchor is still the old visit when day 8's cron starts,
+    // and only the cron's refresh sweep moves it.
+    setNow(atSimDay(8, 7));
+    expect(clinic.patient(id).last_booking_at).toBe(atSimDay(0, 11));
+
     const days = await runDaysObserving(18, id); // days 8..25
 
     expect(days.map((d) => d.run.simDay)).toEqual([...Array(18).keys()].map((i) => 8 + i));
-    expect(clinic.patient(id).last_booking_at).toBe(atSimDay(0, 11));
+    expect(days[0].run.result).toMatchObject({ refreshed_patients: 1 });
+    // Idempotent: once the anchor is current the sweep leaves the patient alone.
+    expect(days.slice(1).map((d) => d.run.result)).toEqual(
+      Array(17).fill(expect.objectContaining({ refreshed_patients: 0 }))
+    );
+    expect(days[0].status).toBe("Waiting");
+    expect(clinic.patient(id).last_booking_at).toBe(newVisit);
     expect(clinic.patient(id).has_future_booking).toBe(false);
     expect(sendRows(id), clinic.formatTimeline([id])).toEqual([
-      [8, "sent", 5, oldBookingId],
-      [15, "sent", 14, oldBookingId]
+      [13, "sent", 5, newBookingId],
+      [22, "sent", 14, newBookingId]
     ]);
     const sends = clinic.sendsFor(id);
-    expect(sends.map((entry) => calendarDaysBetween(newVisit, entry.at))).toEqual([1, 8]);
-    // Day 8 08:00 is 7d21h after the old visit (floor 7 >= 5) but only 21h after the new one.
-    expect(sends.map((entry) => (Date.parse(entry.at) - Date.parse(newVisit)) / 3_600_000)).toEqual([21, 189]);
-    expect(sends.map((entry) => entry.hoursSinceVisit)).toEqual([7 * 24 + 21, 14 * 24 + 21]);
-    expect(sends.every((entry) => entry.bookingId !== newBookingId)).toBe(true);
-    expect(clinic.providerCallsFor(id).map((call) => call.simDay)).toEqual([8, 15]);
+    expect(sends.map((entry) => calendarDaysBetween(newVisit, entry.at))).toEqual([6, 15]);
+    expect(sends.map((entry) => entry.hoursSinceVisit)).toEqual([5 * 24 + 21, 14 * 24 + 21]);
+    expect(sends.every((entry) => entry.bookingId !== oldBookingId)).toBe(true);
+    expect(clinic.providerCallsFor(id).map((call) => call.simDay)).toEqual([13, 22]);
     // Nothing else in the window: the sends and the reset are the only rows.
     expect(clinic.timeline(id)).toHaveLength(3);
     expect(days.at(-1)!.status).toBe("Waiting");
   });
-
-  it.todo("desired: after the day-7 visit passes, the 5-day SMS goes out on day 13 and the 14-day on day 22");
 });
 
-describe("rebooking contrast: metadata refreshed after the new visit", () => {
+describe("rebooking contrast: metadata already refreshed by another write before the cron", () => {
   it("anchors the cycle on the new visit, so the 5-day SMS lands 6 calendar days after it", async () => {
     const id = importPatientSeenOn(0, "Anna Andersson");
     await clinic.runDays(2);
@@ -164,6 +171,8 @@ describe("rebooking contrast: metadata refreshed after the new visit", () => {
 
     const days = await runDaysObserving(18, id); // days 8..25
 
+    // The sweep only selects stale anchors, so it has nothing to do here.
+    expect(days[0].run.result).toMatchObject({ refreshed_patients: 0 });
     expect(days[0].status).toBe("Waiting");
     expect(sendRows(id), clinic.formatTimeline([id])).toEqual([
       [13, "sent", 5, newBookingId],
@@ -194,96 +203,96 @@ async function patientWithFinishedShortStepsRebookedForDay85(name: string) {
   return { id, oldBookingId, newBookingId };
 }
 
-describe("known gap R4b: the rebooked cycle re-picks a step already sent for the old booking", () => {
-  // Current: after the day-85 appointment passes, last_booking_at is still day 0
-  // and the reset emptied the cycle, so getNextSequence picks the highest crossed
-  // step, 14, again. Its reservation reuses the OLD booking_id, collides with the
-  // day-15 row on the 025 (patient_id, booking_id, step_id) index, and the cron
-  // logs a skipped "Redan reserverad" every day until old-visit day 90 is
-  // crossed. Then the 90-day SMS goes out 6 days after the new visit, and the
-  // 180-day one on old-visit day 181.
-  // Desired: the day-85 visit anchors the new cycle (5-day on day 91, 14-day on
-  // day 100) and a step collision is never reported as a parallel reservation.
-  it("collides on step 14 on days 86-90, then sends the 90-day SMS on day 91", async () => {
-    const { id, oldBookingId } = await patientWithFinishedShortStepsRebookedForDay85("Anna Andersson");
+describe("R4b fixed: the rebooked cycle restarts from the new visit instead of re-picking old steps", () => {
+  // Before 027: last_booking_at stayed on day 0 after the day-85 appointment, so
+  // the emptied cycle re-picked step 14 against the OLD booking, collided with the
+  // day-15 row on the 025 (patient_id, booking_id, step_id) index as a skipped
+  // "Redan reserverad" on days 86-90, then sent the old visit's 90-day SMS on day
+  // 91 and its 180-day one on day 181.
+  // Now: day 86's cron re-anchors on the day-85 visit (21 hours ago, nothing
+  // crossed), and the new cycle runs 5-day day 91, 14-day day 100, 90-day day
+  // 176, all filed against the new booking.
+  it("sends nothing on days 86-90, then the 5-day SMS on day 91 against the new booking", async () => {
+    const { id, newBookingId } = await patientWithFinishedShortStepsRebookedForDay85("Anna Andersson");
 
     const blocked = await runDaysObserving(5, id); // days 81..85
     expect(blocked.map((d) => d.status)).toEqual(Array(5).fill("Future booking"));
 
+    // Regression pin: with the stale day-0 anchor the engine would re-pick step 14
+    // (what the store looks like right before day 86's cron). The cron's sweep is
+    // what removes it.
     setNow(atSimDay(86, 7));
-    const store = clinic.readStore();
-    const next = getNextSequence(store.patients.find((p) => p.id === id)!, store.reminder_settings[0], store.reminder_logs);
-    expect(next).toEqual({ stepId: stepId(14), day: 14, sequenceNumber: 2 });
+    const staleStore = clinic.readStore();
+    expect(staleStore.patients.find((p) => p.id === id)!.last_booking_at).toBe(atSimDay(0, 11));
+    expect(
+      getNextSequence(staleStore.patients.find((p) => p.id === id)!, staleStore.reminder_settings[0], staleStore.reminder_logs)
+    ).toEqual({ stepId: stepId(14), day: 14, sequenceNumber: 2 });
 
     const days = await runDaysObserving(6, id); // days 86..91
 
     expect(days.map((d) => d.run.simDay)).toEqual([86, 87, 88, 89, 90, 91]);
-    const afterReset = clinic.timeline(id).filter((entry) => entry.simDay >= 86);
-    expect(
-      afterReset.map((entry) => [entry.simDay, entry.status, entry.stepDay, entry.skipReason, entry.error, entry.bookingId]),
-      clinic.formatTimeline([id])
-    ).toEqual([
-      [86, "skipped", null, "sequence_complete", REDAN_RESERVERAD, oldBookingId],
-      [87, "skipped", null, "sequence_complete", REDAN_RESERVERAD, oldBookingId],
-      [88, "skipped", null, "sequence_complete", REDAN_RESERVERAD, oldBookingId],
-      [89, "skipped", null, "sequence_complete", REDAN_RESERVERAD, oldBookingId],
-      [90, "skipped", null, "sequence_complete", REDAN_RESERVERAD, oldBookingId],
-      [91, "sent", 90, null, null, oldBookingId]
-    ]);
-    // Each collision still counts as a processed patient in the daily batch.
-    expect(days.slice(0, 5).map((d) => d.run.result)).toEqual(
-      Array(5).fill(expect.objectContaining({ processed: 1, sent: 0, skipped: 1 }))
-    );
-    expect(days.slice(0, 5).map((d) => d.status)).toEqual(Array(5).fill("Ready"));
+    expect(days[0].run.result).toMatchObject({ refreshed_patients: 1 });
+    expect(clinic.patient(id).last_booking_at).toBe(atSimDay(85, 11));
+    const store = clinic.readStore();
+    expect(getNextSequence(store.patients.find((p) => p.id === id)!, store.reminder_settings[0], store.reminder_logs)).toBeNull();
+
+    expect(logRowsFrom(id, 86), clinic.formatTimeline([id])).toEqual([[91, "sent", 5, null, null, newBookingId]]);
+    expect(days.slice(0, 5).map((d) => [d.run.result.processed, d.status])).toEqual(Array(5).fill([0, "Waiting"]));
     expect(days[5].run.result).toMatchObject({ processed: 1, sent: 1 });
-    // The collisions never reached the provider.
     expect(clinic.providerCallsFor(id).map((call) => call.simDay)).toEqual([6, 15, 91]);
 
-    const ninety = clinic.sendsFor(id).at(-1)!;
-    expect(ninety.stepId).toBe(stepId(90));
-    expect(calendarDaysBetween(atSimDay(85, 11), ninety.at)).toBe(6);
-    expect(ninety.hoursSinceVisit).toBe(90 * 24 + 21);
-    expect(clinic.patient(id).last_booking_at).toBe(atSimDay(0, 11));
+    const five = clinic.sendsFor(id).at(-1)!;
+    expect(five.stepId).toBe(stepId(5));
+    expect(calendarDaysBetween(atSimDay(85, 11), five.at)).toBe(6);
+    expect(five.hoursSinceVisit).toBe(5 * 24 + 21);
   });
 
-  it("keeps the old anchor for the 180-day SMS: day 181, 96 days after the new visit", async () => {
-    const { id, oldBookingId } = await patientWithFinishedShortStepsRebookedForDay85("Anna Andersson");
+  it("runs the whole new cycle from the day-85 visit: 14-day on day 100, 90-day on day 176, no collisions", async () => {
+    const { id, oldBookingId, newBookingId } = await patientWithFinishedShortStepsRebookedForDay85("Anna Andersson");
 
     await clinic.runDays(105); // days 81..185
 
     expect(sendRows(id), clinic.formatTimeline([id])).toEqual([
       [6, "sent", 5, oldBookingId],
       [15, "sent", 14, oldBookingId],
-      [91, "sent", 90, oldBookingId],
-      [181, "sent", 180, oldBookingId]
+      [91, "sent", 5, newBookingId],
+      [100, "sent", 14, newBookingId],
+      [176, "sent", 90, newBookingId]
     ]);
-    expect(calendarDaysBetween(atSimDay(85, 11), clinic.sendsFor(id).at(-1)!.at)).toBe(96);
-    expect(clinic.timeline(id).filter((entry) => entry.error === REDAN_RESERVERAD)).toHaveLength(5);
+    expect(clinic.sendsFor(id).slice(2).map((entry) => calendarDaysBetween(atSimDay(85, 11), entry.at))).toEqual([
+      6, 15, 91
+    ]);
+    // A re-picked step is never reported as a parallel reservation any more: no
+    // step is re-picked at all.
+    expect(clinic.timeline(id).filter((entry) => entry.error === REDAN_RESERVERAD)).toEqual([]);
+    expect(clinic.timeline(id).filter((entry) => entry.status === "skipped")).toEqual([]);
   });
 
-  it.todo("desired: after the day-85 visit the cycle restarts from it (5-day on day 91, 14-day on day 100)");
+  // Still open in process.ts, though R4 no longer reaches it: a genuine 025
+  // collision (the same step and booking) is logged as a parallel reservation.
   it.todo("desired: a re-picked step that already went out for the old booking is not logged as a parallel reservation");
 });
 
-describe("known gap R4c: a colliding patient burns the max_per_day slot", () => {
-  // Current: the colliding patient's queue key is old visit + 5 days (the earliest
-  // step still owed in the emptied cycle), so it sorts ahead of every fresh
-  // patient. With max_per_day 1 its daily "Redan reserverad" row takes the only
-  // slot on days 86-90, then its (legitimate) 90-day SMS takes day 91. A patient
-  // seen on day 81 is Ready from day 87 but first gets a slot on day 92.
-  // Desired: a collision does not consume a slot, and the colliding patient does
-  // not outrank patients whose own visit is recent.
-  async function collidingPatientAndFreshPatient() {
+describe("R4c fixed: a rebooked patient no longer burns the max_per_day slot", () => {
+  // Before 027: the rebooked patient's stale day-0 anchor made its queue key old
+  // visit + 5 days, so it sorted ahead of every fresh patient and, with
+  // max_per_day 1, its daily "Redan reserverad" row took the only slot on days
+  // 86-90 and its 90-day SMS took day 91. A patient seen on day 81 waited until
+  // day 92 (and with 5/10 steps lost the 5-day SMS entirely).
+  // Now: day 86's cron re-anchors the rebooked patient on its day-85 visit, so it
+  // has nothing due until day 91 and never takes a slot before then. The fresh
+  // patient gets its 5-day SMS on day 87, the first cron after 5 x 24h.
+  async function rebookedPatientAndFreshPatient() {
     clinic.configure({ maxPerDay: 1 });
-    const colliding = await patientWithFinishedShortStepsRebookedForDay85("Anna Andersson");
+    const rebooked = await patientWithFinishedShortStepsRebookedForDay85("Anna Andersson");
     await clinic.runDays(1); // day 81 08:00
     const fresh = importPatientSeenOn(81, "Cecilia Carlsson");
     const freshBookingId = clinic.tables.bookings.find((b) => b.patient_id === fresh)!.id;
-    return { ...colliding, fresh, freshBookingId };
+    return { ...rebooked, fresh, freshBookingId };
   }
 
-  it("starves a fresh patient's 5-day SMS from day 87 to day 92 with production steps", async () => {
-    const { id, fresh, freshBookingId } = await collidingPatientAndFreshPatient();
+  it("gives the fresh patient's 5-day SMS the slot on day 87 with production steps", async () => {
+    const { id, newBookingId, fresh, freshBookingId } = await rebookedPatientAndFreshPatient();
 
     const days = await runDaysObserving(12, fresh); // days 82..93
 
@@ -293,57 +302,41 @@ describe("known gap R4c: a colliding patient burns the max_per_day slot", () => 
       [83, 0, null, "Waiting"],
       [84, 0, null, "Waiting"],
       [85, 0, null, "Waiting"],
-      [86, 1, id, "Waiting"], // fresh patient 4d21h in: not due yet
-      [87, 1, id, "Ready"],
-      [88, 1, id, "Ready"],
-      [89, 1, id, "Ready"],
-      [90, 1, id, "Ready"],
-      [91, 1, id, "Ready"], // the colliding patient's 90-day SMS
-      [92, 1, fresh, "Waiting"],
+      [86, 0, null, "Waiting"], // fresh patient 4d21h in: not due yet
+      [87, 1, fresh, "Waiting"],
+      [88, 0, null, "Waiting"],
+      [89, 0, null, "Waiting"],
+      [90, 0, null, "Waiting"],
+      [91, 1, id, "Waiting"], // the rebooked patient's 5-day SMS, from the day-85 visit
+      [92, 0, null, "Waiting"],
       [93, 0, null, "Waiting"]
     ]);
-    expect(
-      clinic.timeline(id).filter((entry) => entry.simDay >= 86).map((entry) => [entry.simDay, entry.status, entry.error])
-    ).toEqual([
-      [86, "skipped", REDAN_RESERVERAD],
-      [87, "skipped", REDAN_RESERVERAD],
-      [88, "skipped", REDAN_RESERVERAD],
-      [89, "skipped", REDAN_RESERVERAD],
-      [90, "skipped", REDAN_RESERVERAD],
-      [91, "sent", null]
-    ]);
-    // Queued patients past the cap get no log at all, so the only trace of the wait is the late send.
-    expect(sendRows(fresh), clinic.formatTimeline([fresh])).toEqual([[92, "sent", 5, freshBookingId]]);
+    expect(logRowsFrom(id, 86), clinic.formatTimeline([id])).toEqual([[91, "sent", 5, null, null, newBookingId]]);
+    expect(sendRows(fresh), clinic.formatTimeline([fresh])).toEqual([[87, "sent", 5, freshBookingId]]);
     expect(clinic.timeline(fresh)).toHaveLength(1);
-    expect(clinic.sendsFor(fresh)[0].daysSinceVisitDate).toBe(11);
-    expect(days.find((d) => d.run.simDay === 92)!.run.result.results?.[0]?.overdueDays).toBe(5);
+    expect(clinic.sendsFor(fresh)[0].daysSinceVisitDate).toBe(6);
+    expect(days.find((d) => d.run.simDay === 87)!.run.result.results?.[0]?.overdueDays).toBe(0);
   });
 
-  it("makes a fresh patient skip the 5-day SMS entirely with 5/10 steps", async () => {
+  it("keeps the fresh patient's 5-day SMS with 5/10 steps", async () => {
     clinic.configure({ steps: STEPS_5_10 });
-    const { id, fresh, freshBookingId } = await collidingPatientAndFreshPatient();
+    const { id, newBookingId, fresh, freshBookingId } = await rebookedPatientAndFreshPatient();
 
     await clinic.runDays(12); // days 82..93
 
-    // 10 and 14 share a step id, so the collision pattern is identical.
-    expect(
-      clinic.timeline(id).filter((entry) => entry.simDay >= 86).map((entry) => [entry.simDay, entry.status, entry.stepDay])
-    ).toEqual([
-      [86, "skipped", null],
-      [87, "skipped", null],
-      [88, "skipped", null],
-      [89, "skipped", null],
-      [90, "skipped", null],
-      [91, "sent", 90]
+    // Rebooked patient: 5-day on day 91 from the day-85 visit; its 10-day (day 96) is past the window.
+    expect(logRowsFrom(id, 86), clinic.formatTimeline([id])).toEqual([[91, "sent", 5, null, null, newBookingId]]);
+    // Fresh patient: 5-day on day 87, 10-day on day 92 (10d21h after the day-81 visit).
+    expect(sendRows(fresh), clinic.formatTimeline()).toEqual([
+      [87, "sent", 5, freshBookingId],
+      [92, "sent", 10, freshBookingId]
     ]);
-    // Day 92 08:00 is 10d21h after the day-81 visit: the highest crossed step is 10, so 5 is never sent.
-    expect(sendRows(fresh), clinic.formatTimeline()).toEqual([[92, "sent", 10, freshBookingId]]);
-    expect(clinic.sendsFor(fresh)[0].stepId).toBe(stepId(10, STEPS_5_10));
-    expect(clinic.sendsFor(fresh).some((entry) => entry.stepDay === 5)).toBe(false);
+    expect(clinic.sendsFor(fresh).map((entry) => entry.stepId)).toEqual([stepId(5, STEPS_5_10), stepId(10, STEPS_5_10)]);
   });
 
+  // Still open in process.ts, though R4 no longer reaches it: a genuine 025
+  // collision still counts as a processed patient in the capped batch.
   it.todo("desired: a duplicate-reservation skip does not use up a max_per_day slot");
-  it.todo("desired: the fresh patient gets the 5-day SMS on day 87 despite the colliding patient");
 });
 
 describe("cancelled rebooking", () => {
@@ -453,24 +446,18 @@ function logRowsFrom(patientId: string, fromDay: number) {
     .map((entry) => [entry.simDay, entry.status, entry.stepDay, entry.skipReason, entry.error, entry.bookingId]);
 }
 
-describe("known gap R4d: rebooking between the 5- and 14-day SMS", () => {
-  // Current (production steps): the 5-day SMS went out on day 6, the webhook on
-  // day 8 books day 11. The reset empties the cycle, but last_booking_at stays on
-  // day 0 (022 ignores the upcoming appointment and nothing refreshes it once it
-  // passes). From day 12 the engine therefore sees an empty cycle 12+ days after
-  // the OLD visit: the highest crossed step is 5 again. latestValidBooking
-  // matches last_booking_at, so the reservation carries the OLD booking id and
-  // collides with the day-6 row on the 025 (patient, booking, step) index, which
-  // process.ts reports as a skipped "Redan reserverad av parallell förfrågan".
-  // That repeats until old-visit day 14 is crossed (day 15 08:00 = 14d21h), when
-  // the 14-day SMS goes out, filed against the old booking, only 4 calendar
-  // days (93 hours) after the new visit. Nothing else follows until the 90-day
-  // step of the OLD visit (day 91).
-  // With 5/10 steps (rebook day 7 for day 9) the same mechanics give one
-  // collision on day 10 and the 10-day SMS on day 11, 2 days after the visit.
-  // Desired: the day-11 visit anchors the new cycle (5-day on day 17, 14-day on
-  // day 26), exactly the refreshed contrast below, with no collision rows.
-  it("collides on step 5 on days 12-14, then sends the 14-day SMS on day 15, 4 days after the new visit", async () => {
+describe("R4d fixed: rebooking between the 5- and 14-day SMS", () => {
+  // Before 027 (production steps): the 5-day SMS went out on day 6, the webhook
+  // on day 8 booked day 11, and last_booking_at stayed on day 0. From day 12 the
+  // emptied cycle re-picked step 5 against the OLD booking, collided with the
+  // day-6 row on the 025 index as a skipped "Redan reserverad" on days 12-14, then
+  // sent the old visit's 14-day SMS on day 15, 4 days after the new visit. With
+  // 5/10 steps (rebook day 7 for day 9): one collision on day 10 and the 10-day
+  // SMS on day 11.
+  // Now: day 12's cron re-anchors on the day-11 visit, so the new cycle is 5-day
+  // on day 17 and 14-day on day 26 against the new booking, with no collision
+  // rows; 5/10 steps give 5-day on day 15 and 10-day on day 20.
+  it("sends the 5-day SMS on day 17 and the 14-day on day 26 after the day-11 visit, without collisions", async () => {
     const { id, oldBookingId, newBookingId, newVisit } = await patientWithFiveDaySentRebooked(8, 11);
     expect(clinic.patient(id).last_booking_at).toBe(atSimDay(0, 11));
 
@@ -485,39 +472,35 @@ describe("known gap R4d: rebooking between the 5- and 14-day SMS", () => {
       [9, "Future booking", 1],
       [10, "Future booking", 1],
       [11, "Future booking", 1],
-      // A skipped collision is not a send, so the 5-step stays "crossed and unsent".
-      [12, "Ready", 0],
-      [13, "Ready", 0],
-      [14, "Ready", 0],
-      ...[...Array(16).keys()].map((i) => [15 + i, "Waiting", 0])
+      ...[...Array(19).keys()].map((i) => [12 + i, "Waiting", 0])
     ]);
-    expect(logRowsFrom(id, 9), clinic.formatTimeline([id])).toEqual([
-      [12, "skipped", null, "sequence_complete", REDAN_RESERVERAD, oldBookingId],
-      [13, "skipped", null, "sequence_complete", REDAN_RESERVERAD, oldBookingId],
-      [14, "skipped", null, "sequence_complete", REDAN_RESERVERAD, oldBookingId],
-      [15, "sent", 14, null, null, oldBookingId]
-    ]);
-    // Each collision is a processed patient in the daily batch (it holds a max_per_day slot, R4c).
-    expect(days.slice(3, 6).map((d) => d.run.result)).toEqual(
-      Array(3).fill(expect.objectContaining({ processed: 1, sent: 0, skipped: 1 }))
+    // Regression pin: the anchor moved at day 12's cron, the first after the visit.
+    expect(days.map((d) => [d.run.simDay, (d.run.result as { refreshed_patients?: number }).refreshed_patients])).toEqual(
+      days.map((d) => [d.run.simDay, d.run.simDay === 12 ? 1 : 0])
     );
-    expect(days[6].run.result).toMatchObject({ processed: 1, sent: 1 });
-    // Nothing is picked from day 16 to day 30: the next step is the OLD visit's 90-day.
-    expect(days.slice(7).map((d) => d.run.result.processed)).toEqual(Array(15).fill(0));
+    expect(clinic.patient(id).last_booking_at).toBe(newVisit);
 
-    const fourteen = clinic.sendsFor(id).at(-1)!;
-    expect(fourteen.stepId).toBe(stepId(14));
-    expect(fourteen.hoursSinceVisit).toBe(14 * 24 + 21); // measured from the old visit
-    expect(calendarDaysBetween(newVisit, fourteen.at)).toBe(4);
-    expect((Date.parse(fourteen.at) - Date.parse(newVisit)) / 3_600_000).toBe(3 * 24 + 21);
-    expect(clinic.logsFor(id).some((log) => log.booking_id === newBookingId && !log.is_cycle_reset)).toBe(false);
-    expect(clinic.providerCallsFor(id).map((call) => call.simDay)).toEqual([6, 15]);
-    expect(clinic.patient(id).last_booking_at).toBe(atSimDay(0, 11));
+    expect(sendRows(id), clinic.formatTimeline([id])).toEqual([
+      [6, "sent", 5, oldBookingId],
+      [17, "sent", 5, newBookingId],
+      [26, "sent", 14, newBookingId]
+    ]);
+    // Only the reset and the two new sends after the webhook: no collision rows.
+    expect(logRowsFrom(id, 8).map(([day, status]) => [day, status])).toEqual([
+      [8, "cycle_reset"],
+      [17, "sent"],
+      [26, "sent"]
+    ]);
+    expect(days.map((d) => d.run.result.processed)).toEqual(days.map((d) => ([17, 26].includes(d.run.simDay) ? 1 : 0)));
+    const newCycle = clinic.sendsFor(id).slice(1);
+    expect(newCycle.map((entry) => calendarDaysBetween(newVisit, entry.at))).toEqual([6, 15]);
+    expect(newCycle.map((entry) => entry.hoursSinceVisit)).toEqual([5 * 24 + 21, 14 * 24 + 21]);
+    expect(clinic.providerCallsFor(id).map((call) => call.simDay)).toEqual([6, 17, 26]);
   });
 
-  it("with 5/10 steps: collides on step 5 on day 10, then sends the 10-day SMS on day 11, 2 days after the new visit", async () => {
+  it("with 5/10 steps and a day-9 visit: sends the 5-day SMS on day 15 and the 10-day on day 20", async () => {
     clinic.configure({ steps: STEPS_5_10 });
-    const { id, oldBookingId, newVisit } = await patientWithFiveDaySentRebooked(7, 9);
+    const { id, oldBookingId, newBookingId, newVisit } = await patientWithFiveDaySentRebooked(7, 9);
 
     const days = await runDaysObserving(23, id); // days 8..30
 
@@ -527,22 +510,26 @@ describe("known gap R4d: rebooking between the 5- and 14-day SMS", () => {
     ).toEqual([
       [8, "Future booking"],
       [9, "Future booking"], // 08:00, before the 11:00 appointment
-      [10, "Ready"], // 9d21h after the old visit: only the 5-step is crossed
-      ...[...Array(20).keys()].map((i) => [11 + i, "Waiting"])
+      ...[...Array(21).keys()].map((i) => [10 + i, "Waiting"])
     ]);
-    expect(logRowsFrom(id, 8), clinic.formatTimeline([id])).toEqual([
-      [10, "skipped", null, "sequence_complete", REDAN_RESERVERAD, oldBookingId],
-      [11, "sent", 10, null, null, oldBookingId]
+    expect(days[2].run.result).toMatchObject({ refreshed_patients: 1 });
+    expect(sendRows(id), clinic.formatTimeline([id])).toEqual([
+      [6, "sent", 5, oldBookingId],
+      [15, "sent", 5, newBookingId],
+      [20, "sent", 10, newBookingId]
     ]);
-    const ten = clinic.sendsFor(id).at(-1)!;
-    expect(ten.stepId).toBe(stepId(10, STEPS_5_10));
-    expect(ten.hoursSinceVisit).toBe(10 * 24 + 21);
-    expect(calendarDaysBetween(newVisit, ten.at)).toBe(2);
-    expect((Date.parse(ten.at) - Date.parse(newVisit)) / 3_600_000).toBe(45);
-    expect(clinic.providerCallsFor(id).map((call) => call.simDay)).toEqual([6, 11]);
+    expect(logRowsFrom(id, 8).map(([day, status]) => [day, status])).toEqual([
+      [15, "sent"],
+      [20, "sent"]
+    ]);
+    const newCycle = clinic.sendsFor(id).slice(1);
+    expect(newCycle.map((entry) => entry.stepId)).toEqual([stepId(5, STEPS_5_10), stepId(10, STEPS_5_10)]);
+    expect(newCycle.map((entry) => entry.hoursSinceVisit)).toEqual([5 * 24 + 21, 10 * 24 + 21]);
+    expect(newCycle.map((entry) => calendarDaysBetween(newVisit, entry.at))).toEqual([6, 11]);
+    expect(clinic.providerCallsFor(id).map((call) => call.simDay)).toEqual([6, 15, 20]);
   });
 
-  it("contrast: metadata refreshed after the new visit anchors the 5-day on day 17 and the 14-day on day 26", async () => {
+  it("contrast: metadata already refreshed by another write gives the same days, 5-day on day 17 and 14-day on day 26", async () => {
     const { id, oldBookingId, newBookingId, newVisit } = await patientWithFiveDaySentRebooked(8, 11);
 
     const blocked = await runDaysObserving(3, id); // days 9..11
@@ -555,6 +542,7 @@ describe("known gap R4d: rebooking between the 5- and 14-day SMS", () => {
 
     const days = await runDaysObserving(19, id); // days 12..30
 
+    expect(days[0].run.result).toMatchObject({ refreshed_patients: 0 });
     expect(days[0].status).toBe("Waiting");
     expect(sendRows(id), clinic.formatTimeline([id])).toEqual([
       [6, "sent", 5, oldBookingId],
@@ -571,7 +559,4 @@ describe("known gap R4d: rebooking between the 5- and 14-day SMS", () => {
     expect(newCycle.map((entry) => calendarDaysBetween(newVisit, entry.at))).toEqual([6, 15]);
     expect(newCycle.map((entry) => entry.hoursSinceVisit)).toEqual([5 * 24 + 21, 14 * 24 + 21]);
   });
-
-  it.todo("desired: after a rebooking between the 5- and 14-day SMS, the 5-day goes out on day 17 and the 14-day on day 26 without a refresh");
-  it.todo("desired: with 5/10 steps and a day-9 visit, the 5-day goes out on day 15 and the 10-day on day 20");
 });
