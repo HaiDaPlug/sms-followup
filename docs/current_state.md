@@ -323,6 +323,7 @@ The latest sent/delivered SMS strictly before the booking-recorded timestamp qua
 | 024 | `stale_cycle` and `out_of_order` added to the `reminder_logs.skip_reason` CHECK constraint |
 | 025 | **Unapplied.** Stable follow-up ids: mints `id`/`active` inside `sms_steps`, adds `reminder_logs.step_id`/`step_day` and `scheduled_sms.step_id`, backfills them from position, adds step-keyed unique indexes beside the 013 ones, adds `step_removed` to the skip-reason CHECK |
 | 026 | **Unapplied, and only after Deploy B.** Re-runs the 025 backfill, then drops the two position-keyed unique indexes from 013 |
+| 027 | **Unapplied; must be live before Deploy B's first daily cron.** `refresh_passed_booking_metadata()`: moves `last_booking_at` forward through the 022 refresh for every patient whose newest past, non-cancelled booking is newer than the stored value. The daily cron calls it before reading the store (fixes R4). Additive, never moves the column backwards, service_role only |
 
 **Applied in production:** 001–024 (022–024 confirmed 2026-09-02). 025 and 026 are written but unapplied.
 
@@ -669,6 +670,10 @@ Not the usual "apply then deploy". Both halves of the ordering are load-bearing:
 3. **Deploy B** = the rest of the branch. It must come **after** 025, because PostgREST rejects an insert naming an unknown column (PGRST204): every send path would fail, and the scheduled worker's catch would mark its claimed rows `unknown` — messages recorded as possibly-sent that were never attempted.
 4. **Apply 026** the same day, once `select count(*) from reminder_logs where status in ('pending','unknown','sent','dry_run','delivered') and step_id is null and created_at > '<Deploy B timestamp>'` returns 0.
 
+**027 (R4 fix) must be live before Deploy B's first daily cron.** Deploy B's `processDailyReminders` calls `refresh_passed_booking_metadata()` and fails the run if the function is missing, rather than sending against stale anchors. 027 is additive and harmless to apply at any earlier point.
+
+**`npx supabase db push` applies every pending migration in order.** With 025, 026 and 027 all pending it cannot apply 025 alone, so step 2 as written would also apply 026 before Deploy B. Hold 026 back (or apply 025 and 027 individually) until step 4.
+
 **Between 025 and 026, do not add, delete, reorder, or re-time a follow-up.** Both index families are live in that window, and any change to sorted positions lets a correct day-based send collide on the position-keyed index. Template text is safe; so is the Aktiv toggle once Deploy B is live.
 
 ### Verification
@@ -794,6 +799,7 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
   - [ ] Deploy A (id-preserving settings route), then confirm an id-less settings save is refused
   - [ ] `npx supabase db push` for 025, then run the verification queries in its header
   - [ ] Confirm PostgREST sees `step_id`/`step_day` before deploying further
+  - [ ] Apply 027 before Deploy B's first daily cron, then `select public.refresh_passed_booking_metadata();` (the header's verification query should then return 0). Mind that `db push` also applies 026 if it is still pending
   - [ ] Deploy B (rest of `followups-v2`)
   - [ ] Browser check: toggle a follow-up off, save, reload; schedule dialog lists it as "(inaktiv)"; `/app/analytics` shows "Sedan start"
   - [ ] Cron dry-run with `dry_run_mode` on: results ordered oldest-due first, each carrying `stepId`/`stepDay`
@@ -836,7 +842,7 @@ Each gap below is pinned by a `known gap` test that asserts today's behaviour. T
   - The fix is the same as for the booking cap above.
 - [ ] **R2: most visits get the 5- and 14-day SMS a day late.** "Day N" means N × 24 elapsed hours at the 08:00 UTC cron. A visit stored after 08:00 UTC therefore gets them on days 6 and 15. That covers every visit a CSV import on Vercel stores after 08:00 local wall-clock time. On Vercel Hobby the cron may fire at any minute from 08:00 to 08:59 UTC, so a visit stored between 08:00 and 08:59 UTC can go either way, depending on that day's invocation minute. Decide whether "day N" should mean the Nth calendar day.
 - [ ] **R3: a large backlog costs fresh patients the 5-day SMS.** The queue serves the oldest due date first, and each patient gets the highest crossed step. With more than 225 patients already due ahead (125 with 5/10 steps), a fresh patient's first message is the 14-day one. No row records the skipped step.
-- [ ] **R4: a rebooking for a future date anchors the new cycle on the old visit.** Nothing refreshes `last_booking_at` once the appointment has passed. As a result:
+- [x] **R4: fixed in code, pending rollout (migration 027 + Deploy B).** The daily cron now runs `refresh_passed_booking_metadata()` before reading the store, so a rebooked appointment becomes the anchor at the first cron after it has passed; the R4 scenarios in both layers now assert the fixed behaviour. Production still has the bug until then. Before the fix, a rebooking for a future date anchored the new cycle on the old visit, because nothing refreshed `last_booking_at` once the appointment had passed. As a result:
   - a rebooking before the 5-day SMS: the 5-day SMS arrives the morning after the new visit,
   - a rebooking between the 5- and 14-day SMS: the 5-day step is re-picked and collides every day until the old visit's day 14, then the 14-day SMS goes out a few days after the new visit, filed against the old booking (R4d in `rebooking.sim.test.ts`),
   - steps already sent collide as "Redan reserverad" every day, and each collision uses up a `max_per_day` slot,
@@ -886,7 +892,7 @@ Each gap below is pinned by a `known gap` test that asserts today's behaviour. T
 - `src/lib/reminders/simulation/rebooking.sim.test.ts` — webhook rebookings anchored on the old visit (R4), cancelled rebookings, cancellation of scheduled SMS
 - `src/lib/reminders/simulation/dryRunAndScheduled.sim.test.ts` — dry run consuming the step (R5), scheduled SMS, delivery unknown, provider failure, stale pending reservations, automation off
 
-**227 tests (plus 12 `it.todo` recording the desired behaviour for known gaps) across 20 files.** Provider HTTP is mocked and route/database behavior is simulated. Nothing in `npm test` exercises a real database, real 46elks traffic, Vercel runtime limits, or the RLS policies — see the session 16 and session 18 gaps.
+**229 tests (plus 6 `it.todo` recording the desired behaviour for known gaps) across 20 files.** `process.test.ts` also covers the R4 sweep: it runs before the store is read, and a failed sweep stops the run before anything is sent. Provider HTTP is mocked and route/database behavior is simulated. Nothing in `npm test` exercises a real database, real 46elks traffic, Vercel runtime limits, or the RLS policies — see the session 16 and session 18 gaps.
 
 `npm run sandbox:test` is the opt-in exception. It runs `src/test/sandbox/followups.sandbox.ts` (8 tests) against a local Supabase stack in Docker, with time travel done by shifting stored timestamps. On that stack, migrations 001–026 apply cleanly to an empty database. It never touches the linked production project. See `docs/sandbox.md` for both layers, the commands and the safety rules.
 

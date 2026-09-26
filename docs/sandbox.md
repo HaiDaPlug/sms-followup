@@ -417,7 +417,7 @@ from this checkout talk to production.
 |---|---|---|---|
 | R2 | "Day 5" means 120 elapsed hours at an 08:00 UTC cron | **Confirmed** | Layers 1 and 2 |
 | R3 | A large backlog costs fresh patients the 5-day SMS | **Confirmed.** The ~225 (5/14) and ~125 (5/10) figures hold only when the backlog is already due. They rise to 350 and 250 when the backlog is there from the visit day | Layer 1 |
-| R4 | A rebooking for a future date leaves the cycle anchored on the old visit | **Confirmed**, plus a worse variant for new patients | Layers 1 and 2 |
+| R4 | A rebooking for a future date leaves the cycle anchored on the old visit | **Confirmed**, plus a worse variant for new patients. **Fixed by 027** (pending rollout) | Layers 1 and 2 |
 | R5 | Dry run consumes the step | **Confirmed** | Layer 1 |
 | R6 | `readStore()` is capped at 1000 rows per table | **Confirmed** for bookings, patients and reminder_logs | Layer 2 |
 
@@ -483,12 +483,21 @@ Two realistic backlogs of never-contacted patients (100–400 days), each with o
 The lost step leaves no trace. A patient carried past the cap gets no log row, and no row records a
 skip reason for the 5-day step.
 
-### R4: a rebooking anchors the new cycle on the old visit
+### R4: a rebooking anchors the new cycle on the old visit — fixed by 027 (pending rollout)
 
-023 writes a cycle_reset and runs the 022 refresh, and that refresh only counts visits at or before
-`now()`. Nothing runs it again once the new appointment has passed. So the new cycle is measured
-from the old visit, and its logs are filed against the old `booking_id`. Each scenario below
-exercises this.
+**Fix.** Migration 027 adds `refresh_passed_booking_metadata()`, and the daily cron runs it before
+reading the store. At the first cron after the appointment, the new visit becomes the anchor and
+its cycle is filed against the new `booking_id`. The R4 tests in both layers now assert this: with
+an 11:00 UTC visit, the 5-day and 14-day SMS go out 5d21h and 14d21h after the new visit (for
+example days 13 and 22 in R4a, days 17 and 26 in R4d). There are no "Redan reserverad" collisions,
+no slot is burned, and a patient confirmed from the review queue before the first visit gets
+follow-ups. Against the real SQL the sweep moves exactly the patients with a newer passed booking
+and never moves anyone backwards.
+
+**Before the fix** (kept for history): 023 writes a cycle_reset and runs the 022 refresh, and that
+refresh only counts visits at or before `now()`. Nothing ran it again once the new appointment had
+passed, so the new cycle was measured from the old visit and its logs were filed against the old
+`booking_id`:
 
 - **R4a, short gap.** Visit on day 0 at 11:00, rebooked on day 2 for day 7 at 11:00.
   - Days 3–7 are blocked as Future booking.
