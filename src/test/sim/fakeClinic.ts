@@ -1119,6 +1119,30 @@ export class FakeClinic {
   }
 
   /**
+   * refresh_passed_booking_metadata (027), which the daily cron calls before it
+   * reads the store: refresh_patient_booking_metadata for every patient with a
+   * non-cancelled booking whose booking_at <= now() and is newer than the
+   * stored last_booking_at (or none is stored). Never moves the column
+   * backwards: a patient whose only newer booking was cancelled is not
+   * selected. Returns how many patients were refreshed.
+   */
+  refreshPassedBookingMetadata(): number {
+    const now = Date.now();
+    const stale = this.tables.patients.filter((patient) =>
+      this.tables.bookings.some(
+        (booking) =>
+          booking.patient_id === patient.id &&
+          booking.cancelled === false &&
+          booking.booking_at !== null &&
+          Date.parse(booking.booking_at) <= now &&
+          (patient.last_booking_at === null || Date.parse(booking.booking_at) > Date.parse(patient.last_booking_at))
+      )
+    );
+    for (const patient of stale) this.refreshBookingMetadata(patient.id);
+    return stale.length;
+  }
+
+  /**
    * mark_pending_unknown (013): pending -> unknown with the fixed Swedish error,
    * plus one delivery_unknown review item per row, in one transaction.
    */
@@ -1508,7 +1532,8 @@ export class FakeClinic {
    * refresh_patient_booking_metadata (022) for one patient, or every patient
    * when omitted: "some write touched this patient" (import, webhook, cancel).
    * Sets last_booking_at, latest_treatment, updated_at only. NEVER called when
-   * time advances — production has no such job.
+   * time advances on its own; the only time-driven caller is the daily cron's
+   * refresh_passed_booking_metadata sweep (027, refreshPassedBookingMetadata).
    */
   refreshBookingMetadata(patientId?: string): void {
     const ids = patientId ? [this.requirePatient(patientId).id] : this.tables.patients.map((p) => p.id);
@@ -2273,8 +2298,8 @@ class FakeQuery {
 /**
  * Module mock for "@/lib/supabase/client" (export it as `supabase`). from()
  * covers the seven sim tables; rpc() covers mark_pending_unknown and
- * resolve_delivery_unknown (013) and claim_due_scheduled_sms (016). Anything
- * else throws.
+ * resolve_delivery_unknown (013), claim_due_scheduled_sms (016) and
+ * refresh_passed_booking_metadata (027). Anything else throws.
  */
 export const supabaseMock = guard(
   {
@@ -2290,6 +2315,9 @@ export const supabaseMock = guard(
         const ids = args.p_log_ids;
         if (!Array.isArray(ids)) throw new Error("fakeSupabase: mark_pending_unknown needs p_log_ids: string[]");
         return { data: null, error: clinic.markPendingUnknown(ids as string[]) };
+      }
+      if (fn === "refresh_passed_booking_metadata") {
+        return { data: clinic.refreshPassedBookingMetadata(), error: null };
       }
       if (fn === "claim_due_scheduled_sms") {
         const limit = typeof args.p_limit === "number" ? args.p_limit : 25;
