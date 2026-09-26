@@ -826,6 +826,23 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 - [x] ~~Confirm `SMS_DELIVERY_WEBHOOK_SECRET` is set in Vercel~~ — verified matching 2026-09-02 (but receipts still are not arriving; see above)
 - [ ] Set `CRON_SECRET` in Vercel, and confirm the Vault `cron_secret` matches it — **still unverified**, deliberately not probed since a valid call would send real SMS
 
+### Follow-up gaps found by the sandbox
+
+Each gap below is pinned by a `known gap` test that asserts today's behaviour. The numbers are in `docs/sandbox.md`, under "What the simulations showed".
+
+- [ ] **R6: the 1000-row cap also hits patients and reminder_logs, not only bookings.** Past 1000 rows, `readStore()` drops the *oldest* rows of every table.
+  - Patients: there were 984 on 2026-09-23. From 1001 on, the patients the clinic has known longest stop getting follow-ups, without any error.
+  - Logs: past 1000 rows, steps already sent look unsent and collide as "Redan reserverad".
+  - The fix is the same as for the booking cap above.
+- [ ] **R2: most visits get the 5- and 14-day SMS a day late.** "Day N" means N × 24 elapsed hours at the 08:00 UTC cron. A visit stored after 08:00 UTC therefore gets them on days 6 and 15. That covers every visit a CSV import on Vercel stores after 08:00 local wall-clock time. On Vercel Hobby the cron may fire at any minute from 08:00 to 08:59 UTC, so a visit stored between 08:00 and 08:59 UTC can go either way, depending on that day's invocation minute. Decide whether "day N" should mean the Nth calendar day.
+- [ ] **R3: a large backlog costs fresh patients the 5-day SMS.** The queue serves the oldest due date first, and each patient gets the highest crossed step. With more than 225 patients already due ahead (125 with 5/10 steps), a fresh patient's first message is the 14-day one. No row records the skipped step.
+- [ ] **R4: a rebooking for a future date anchors the new cycle on the old visit.** Nothing refreshes `last_booking_at` once the appointment has passed. As a result:
+  - a rebooking before the 5-day SMS: the 5-day SMS arrives the morning after the new visit,
+  - a rebooking between the 5- and 14-day SMS: the 5-day step is re-picked and collides every day until the old visit's day 14, then the 14-day SMS goes out a few days after the new visit, filed against the old booking (R4d in `rebooking.sim.test.ts`),
+  - steps already sent collide as "Redan reserverad" every day, and each collision uses up a `max_per_day` slot,
+  - a new patient that the operator confirms from the review queue before the first visit never gets a follow-up ("No valid booking").
+- [ ] **R5: dry run consumes the step.** Switching dry run off does not give back the steps it rehearsed, so the 5-day SMS is skipped for good. Until this is fixed, delete the `dry_run` logs before switching dry run off.
+
 ### Analytics QA (post-migration)
 - [ ] Run development webhook smoke tests: ID match, phone match, email match, conflict, unknown customer, retry, reassignment, and cancellation
 - [ ] Smoke test the session 12 fixes specifically: concurrent cancellation vs. update/create for the same booking (no interleaving), a manual confirm where the selected candidate has a different `bokadirekt_customer_id` than the raw booking (should raise, not silently overwrite), and a cancellation payload missing `Customer.Id`
@@ -863,8 +880,15 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 - `src/lib/analytics/conversionRate.test.ts` — distinct-patient counting, null vs. 0 %, and the intersection that keeps the rate ≤ 100 %
 - `src/lib/analytics/attributionWindow.test.ts` — exclusive upper bound, untrusted query-param parsing, and the monotonicity property that makes the window safe to change retroactively
 - `src/lib/patients/followupTrack.test.ts` — the patients-page follow-up track reads a cycle the way the engine does: id before day snapshot before position, earlier crossed steps passed over in favour of the latest, dry runs / pending / failures kept distinct from real sends
+- `src/test/sim/smoke.sim.test.ts` — self-checks of the in-memory follow-up simulator. The simulator drives the real, unchanged `processDailyReminders`/`processScheduledSms` with a fake clock and a fake data layer
+- `src/lib/reminders/simulation/thresholds.sim.test.ts` — day-N timing at the 08:00 UTC cron (R2); full 5/14/90/180/365 and 5/10 journeys; late discovery; inactive steps; new webhook patients confirmed before their visit
+- `src/lib/reminders/simulation/backlog.sim.test.ts` — queue order and overflow under `max_per_day`, and how a backlog starves the 5-day SMS (R3)
+- `src/lib/reminders/simulation/rebooking.sim.test.ts` — webhook rebookings anchored on the old visit (R4), cancelled rebookings, cancellation of scheduled SMS
+- `src/lib/reminders/simulation/dryRunAndScheduled.sim.test.ts` — dry run consuming the step (R5), scheduled SMS, delivery unknown, provider failure, stale pending reservations, automation off
 
-**169 tests across 15 files.** Provider HTTP is mocked and route/database behavior is simulated; nothing exercises a real database, real 46elks traffic, Vercel runtime limits, or the RLS policies — see the session 16 and session 18 gaps.
+**227 tests (plus 12 `it.todo` recording the desired behaviour for known gaps) across 20 files.** Provider HTTP is mocked and route/database behavior is simulated. Nothing in `npm test` exercises a real database, real 46elks traffic, Vercel runtime limits, or the RLS policies — see the session 16 and session 18 gaps.
+
+`npm run sandbox:test` is the opt-in exception. It runs `src/test/sandbox/followups.sandbox.ts` (8 tests) against a local Supabase stack in Docker, with time travel done by shifting stored timestamps. On that stack, migrations 001–026 apply cleanly to an empty database. It never touches the linked production project. See `docs/sandbox.md` for both layers, the commands and the safety rules.
 
 `src/test/mockSupabase.ts` provides a small reusable chainable Supabase mock for tests that need to assert on `.eq()`/`.update()` call arguments without a live database.
 
