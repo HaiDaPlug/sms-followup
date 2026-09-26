@@ -802,7 +802,7 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
   - [ ] Apply 027 before Deploy B's first daily cron, then `select public.refresh_passed_booking_metadata();` (the header's verification query should then return 0). Mind that `db push` also applies 026 if it is still pending
   - [ ] Deploy B (rest of `followups-v2`)
   - [ ] Browser check: toggle a follow-up off, save, reload; schedule dialog lists it as "(inaktiv)"; `/app/analytics` shows "Sedan start"
-  - [ ] Cron dry-run with `dry_run_mode` on: results ordered oldest-due first, each carrying `stepId`/`stepDay`
+  - [ ] Cron dry-run with `dry_run_mode` on: results ordered oldest-due first, each carrying `stepId`/`stepDay`. **Warning (R5 below):** every `dry_run` row consumes that step for a real patient, so up to 25 patients would never get it for real. Delete the run's `dry_run` rows afterwards, or do this check in the local sandbox instead
   - [ ] Apply 026 once no post-deploy row lacks `step_id`
 - [x] ~~**Apply and validate migrations 022–024.**~~ Applied and verified in production 2026-09-02 by direct RPC calls.
 - [x] ~~**Disable optional inline polling for production batches.**~~ `SMS_VERIFY_DELIVERY=off` set in Vercel 2026-09-02.
@@ -832,22 +832,30 @@ The `--fs-*` tokens exist so this converges over time; components are still on r
 - [x] ~~Confirm `SMS_DELIVERY_WEBHOOK_SECRET` is set in Vercel~~ — verified matching 2026-09-02 (but receipts still are not arriving; see above)
 - [ ] Set `CRON_SECRET` in Vercel, and confirm the Vault `cron_secret` matches it — **still unverified**, deliberately not probed since a valid call would send real SMS
 
-### Follow-up gaps found by the sandbox
+### Open follow-up gaps (found by the sandbox)
 
-Each gap below is pinned by a `known gap` test that asserts today's behaviour. The numbers are in `docs/sandbox.md`, under "What the simulations showed".
+Ordered by impact. Each gap is pinned by a `known gap` test that asserts today's behaviour, with an `it.todo` for the fix (6 open). Numbers and scenarios are in `docs/sandbox.md` under "What the simulations showed"; run `npm test` (simulator) or `npm run sandbox:test` (local Supabase) to reproduce.
 
-- [ ] **R6: the 1000-row cap also hits patients and reminder_logs, not only bookings.** Past 1000 rows, `readStore()` drops the *oldest* rows of every table.
-  - Patients: there were 984 on 2026-09-23. From 1001 on, the patients the clinic has known longest stop getting follow-ups, without any error.
+- [ ] **R6: `readStore()` silently drops the oldest rows past 1000 in every table, not only bookings.** Imminent: there were 984 patients on 2026-09-23.
+  - Patients: from 1001 on, the patients the clinic has known longest stop getting follow-ups, without any error.
   - Logs: past 1000 rows, steps already sent look unsent and collide as "Redan reserverad".
-  - The fix is the same as for the booking cap above.
-- [ ] **R2: most visits get the 5- and 14-day SMS a day late.** "Day N" means N × 24 elapsed hours at the 08:00 UTC cron. A visit stored after 08:00 UTC therefore gets them on days 6 and 15. That covers every visit a CSV import on Vercel stores after 08:00 local wall-clock time. On Vercel Hobby the cron may fire at any minute from 08:00 to 08:59 UTC, so a visit stored between 08:00 and 08:59 UTC can go either way, depending on that day's invocation minute. Decide whether "day N" should mean the Nth calendar day.
-- [ ] **R3: a large backlog costs fresh patients the 5-day SMS.** The queue serves the oldest due date first, and each patient gets the highest crossed step. With more than 225 patients already due ahead (125 with 5/10 steps), a fresh patient's first message is the 14-day one. No row records the skipped step.
-- [x] **R4: fixed in code, pending rollout (migration 027 + Deploy B).** The daily cron now runs `refresh_passed_booking_metadata()` before reading the store, so a rebooked appointment becomes the anchor at the first cron after it has passed; the R4 scenarios in both layers now assert the fixed behaviour. Production still has the bug until then. Before the fix, a rebooking for a future date anchored the new cycle on the old visit, because nothing refreshed `last_booking_at` once the appointment had passed. As a result:
-  - a rebooking before the 5-day SMS: the 5-day SMS arrives the morning after the new visit,
-  - a rebooking between the 5- and 14-day SMS: the 5-day step is re-picked and collides every day until the old visit's day 14, then the 14-day SMS goes out a few days after the new visit, filed against the old booking (R4d in `rebooking.sim.test.ts`),
-  - steps already sent collide as "Redan reserverad" every day, and each collision uses up a `max_per_day` slot,
-  - a new patient that the operator confirms from the review queue before the first visit never gets a follow-up ("No valid booking").
-- [ ] **R5: dry run consumes the step.** Switching dry run off does not give back the steps it rehearsed, so the 5-day SMS is skipped for good. Until this is fixed, delete the `dry_run` logs before switching dry run off.
+  - Fix: page the reads the way `getAnalyticsData` does (same fix as the booking cap above).
+- [ ] **R5: dry run consumes the step.** A `dry_run` row counts as sent, so switching dry run off does not give the rehearsed step back; the 5-day SMS is skipped for good. It also applies to scheduled SMS fired during dry run. Until fixed: delete the `dry_run` rows before switching dry run off, and see the warning on the rollout's dry-run check above.
+- [ ] **R3: a large backlog costs fresh patients the 5-day SMS.** The queue serves the oldest due date first and each patient gets the highest crossed step. With more than 225 patients already due ahead (125 with 5/10 steps), a fresh patient's first message is the 14-day one. No row records the skipped step. Most likely right after Deploy B, when the imported backlog is first drained at 25/day. Decide whether short follow-ups should jump the queue or the cap should rise during the drain.
+- [ ] **R2: most visits get the 5- and 14-day SMS a day late.** "Day N" means N × 24 elapsed hours at the 08:00 UTC cron, so a visit stored after 08:00 UTC gets them on days 6 and 15. That covers every visit a CSV import on Vercel stores after 08:00 local wall-clock time. On Vercel Hobby the cron may fire at any minute from 08:00 to 08:59 UTC, so visits stored in that hour can go either way. Decide whether "day N" should mean the Nth calendar day (related: the unused "Sändningstid" setting above).
+- [ ] **A duplicate-reservation skip still uses a `max_per_day` slot.** Any "Redan reserverad" collision counts as processed, so it takes a slot from a patient who could have been sent. After R4's fix this needs a residual cause (R6's truncated logs, concurrent sends), but the cost is unchanged.
+- [ ] **A failed send blocks the patient until someone acts.** The `failed_sms` review item puts them in Needs review; there is no automatic retry. Resolving the item without resending moves them on to the next step, so the failed one is lost.
+- [ ] **Pausing the automation loses the steps that came due meanwhile.** With `is_active` off nothing is logged; on re-enable only the highest crossed step is sent. The scheduled-SMS worker ignores `is_active` (only dry run applies to it), which may be intended but is worth knowing.
+- [ ] **Security: 022's `refresh_patient_booking_metadata()` is executable by `authenticated`.** 022 revoked only `public`/`anon`, and Supabase's default privileges grant `authenticated` (verified in the local sandbox). It is SECURITY DEFINER, so any signed-in user can recompute any patient's anchor; the damage is limited because the value is always the canonical one. Fix: revoke from `authenticated` in a new migration, as 027 does; check 022's other two functions at the same time.
+
+Not yet verified anywhere:
+
+- [ ] 025/026 have only run against an empty database; their backfill on production-shaped data is unrehearsed.
+- [ ] The R3 boundaries come from the simulator only; the Vercel Hobby "any minute in the hour" timing is modelled from documentation, not observed.
+
+Fixed in code, pending rollout:
+
+- [x] **R4: a rebooking for a future date anchored the new cycle on the old visit** (early 5/14-day SMS right after the new visit, daily "Redan reserverad" collisions, review-queue patients never followed up). Migration 027 + the daily-cron sweep fix it once 027 and Deploy B are live; production still has the bug until then. Before/after numbers are in `docs/sandbox.md`.
 
 ### Analytics QA (post-migration)
 - [ ] Run development webhook smoke tests: ID match, phone match, email match, conflict, unknown customer, retry, reassignment, and cancellation
